@@ -11,6 +11,7 @@ let is_prime n =
   then false
   else go 2;;
 
+<<<<<<< HEAD
 let nth_prime n =
   let rec nth_find times number =
     if times = n then number
@@ -19,3 +20,9 @@ let nth_prime n =
   in
   nth_find 0 2
 ;;
+=======
+  let rec nth_prime times number =
+    if times = n then number
+    else if is_prime number then prime (times+1) (number+1)
+    else prime times (number+1);;
+>>>>>>> 6acca7a32cb63a7fe22cbb2ee1b8da282084878a
