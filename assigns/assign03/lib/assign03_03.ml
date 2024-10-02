@@ -26,13 +26,11 @@ let rec short lst =
   match lst with
   | [] -> []
   | h :: t -> h @ short t
-;;
 
 let rec element t =
   match t with
   | Leaf x -> [Leaf x]
   | Node children -> short (map element children)
-;;
 
 let rec collapse h t =
   if h <= 0 then t
