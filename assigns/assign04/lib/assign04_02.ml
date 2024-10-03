@@ -14,7 +14,6 @@ let rec type_of (e : expr) : ty option =
   match e with
   | True -> Some Bool
   | False -> Some Bool
-  | Num _ -> Some Int
   | Or (e1, e2) -> (
       match type_of e1, type_of e2 with
       | Some Bool, Some Bool -> Some Bool
@@ -30,3 +29,4 @@ let rec type_of (e : expr) : ty option =
       | Some Bool, Some t2, Some t3 when t2 = t3 -> Some t2
       | _ -> None
     )
+    | Num _ -> Some Int
