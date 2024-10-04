@@ -1,27 +1,26 @@
 let rec lifespan f s pred count =
   if pred (f s) then count
-  else if count >= 10000000 then max_int
+  else if f s = s then max_int
   else lifespan f (f s) pred (count + 1)
 
 let last_function_standing funcs start pred =
-  let rec find_max funcs current_max current_func =
+  let rec find_max funcs current_max current_func has_tie =
     match funcs with
-    | [] -> current_func
+    | [] -> if has_tie then None else current_func
     | f :: rest ->
         let life = lifespan f start pred 0 in
         match current_max, current_func with
-        | None, _ -> find_max rest (Some life) (Some f)
-        | Some max_life, Some max_func ->
+        | None, _ -> find_max rest (Some life) (Some f) false
+        | Some max_life, Some _ ->
             if life > max_life then
-              find_max rest (Some life) (Some f)
+              find_max rest (Some life) (Some f) false
             else if life = max_life then
-              None
+              find_max rest current_max current_func true
             else
-              find_max rest (Some max_life) (Some max_func)
+              find_max rest current_max current_func has_tie
         | _ -> None
   in
   match funcs with
   | [] -> None
-  | _ -> find_max funcs None None
+  | _ -> find_max funcs None None false
 ;;
-
