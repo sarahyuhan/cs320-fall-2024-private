@@ -22,7 +22,7 @@ module ListSet = struct
 
   let rec union list1 list2 =
     match list1, list2 with
-    | [], x | x, [] -> lst
+    | [], x | x, [] -> x
     | h::t, h2::t2 ->
       if h = h2 then h::union t t2
       else if h < h2 then h::union t list2
