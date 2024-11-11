@@ -1,4 +1,5 @@
 open Utils
+open Parser
 
 type env = (string * value) list
 
@@ -49,6 +50,23 @@ let rec interp_expr env = function
           interp_expr env e2 >>= fun v2 ->
           interp_expr ((x, v2) :: env) body
       | _ -> Error InvalidApp)
+
+let parse s =
+  match My_parser.parse s with
+  | Some expr -> Ok expr
+  | None -> Error ParseFail
+
+let rec subst value var expr =
+  match expr with
+  | Var x -> if x = var then value else expr
+  | Num _ | True | False | Unit -> expr
+  | Bop (op, e1, e2) -> Bop (op, subst value var e1, subst value var e2)
+  | If (e1, e2, e3) -> If (subst value var e1, subst value var e2, subst value var e3)
+  | Let (x, e1, e2) ->
+      let e1' = subst value var e1 in
+      if x = var then Let (x, e1', e2) else Let (x, e1', subst value var e2)
+  | Fun (x, e) -> if x = var then expr else Fun (x, subst value var e)
+  | App (e1, e2) -> App (subst value var e1, subst value var e2)
 
 let interp prog =
   interp_expr [] prog
