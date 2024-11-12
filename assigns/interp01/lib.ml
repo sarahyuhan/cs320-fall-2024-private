@@ -51,22 +51,27 @@ let rec interp_expr env = function
           interp_expr ((x, v2) :: env) body
       | _ -> Error InvalidApp)
 
-let parse s =
-  match My_parser.parse s with
-  | Some expr -> Ok expr
-  | None -> Error ParseFail
-
 let rec subst value var expr =
   match expr with
-  | Var x -> if x = var then value else expr
-  | Num _ | True | False | Unit -> expr
+  | Num n -> Num n
+  | True -> True
+  | False -> False
+  | Unit -> Unit
+  | Var y -> if x = y then (expr_of_value value) else Var y
   | Bop (op, e1, e2) -> Bop (op, subst value var e1, subst value var e2)
   | If (e1, e2, e3) -> If (subst value var e1, subst value var e2, subst value var e3)
-  | Let (x, e1, e2) ->
-      let e1' = subst value var e1 in
-      if x = var then Let (x, e1', e2) else Let (x, e1', subst value var e2)
-  | Fun (x, e) -> if x = var then expr else Fun (x, subst value var e)
-  | App (e1, e2) -> App (subst value var e1, subst value var e2)
+  | Let (y, e1, e2) -> if x = y then Let (y, subst value var e1, e2) else Let (y, subst value var e1, subst value var e2)
+  | App (e1, e2) -> App (subst v x e1, subst value var e2)
+  | Fun (y, expr) ->
+    if x = y
+    then Fun (y, expr)
+    else 
+      let y' = gensym () in
+      Fun (y', subst value var (var_replace y' y expr))
 
-let interp prog =
-  interp_expr [] prog
+let parse s = My_parser.parse s
+  
+let interp s =
+  match parse s with
+  | Some expr -> eval expr
+  | None -> Error ParseFail
