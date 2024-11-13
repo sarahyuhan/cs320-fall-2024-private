@@ -2,7 +2,7 @@ open Utils
 open Parser
 open Lib
 
-let parse s = My_parser.parse s
+let parse = My_parser.parse
 type env = (string * value) list
 
 let rec lookup env x =
