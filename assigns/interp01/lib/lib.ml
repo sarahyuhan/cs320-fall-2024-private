@@ -105,5 +105,9 @@ let rec subst value x expr =
 
 let interp s =
   match parse s with
-    | Some expr -> eval expr
-    | None -> Error ParseFail
+  | Some expr ->
+      (match eval expr with
+      | Ok v -> Ok v
+      | Error e -> Error e)
+  | None ->
+      Error ParseFail
