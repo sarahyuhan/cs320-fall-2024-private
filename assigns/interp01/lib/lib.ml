@@ -23,6 +23,25 @@ let rec var_replace y x e =
   | App (e1, e2) -> App (var_replace y x e1, var_replace y x e2)
   | Fun (z, e) -> if z = x then Fun (z, e) else Fun (z, var_replace y x e)
 
+let rec subst value x expr =
+  match expr with
+  | Num n -> Num n
+  | True -> True
+  | False -> False
+  | Unit -> Unit
+  | Var y -> if x = y then (expr_of_value value) else Var y
+  | Bop (op, e1, e2) -> Bop (op, subst value x e1, subst value x e2)
+  | If (e1, e2, e3) -> If (subst value x e1, subst value x e2, subst value x e3)
+  | Let (y, e1, e2) -> if x = y then Let (y, subst value x e1, e2) else Let (y, subst value x e1, subst value x e2)
+  | App (e1, e2) -> App (subst value x e1, subst value x e2)
+  | Fun (y, expr) ->
+    if x = y
+    then Fun (y, expr)
+    else 
+      let y' = gensym () in
+      Fun (y', subst value x (var_replace y' y expr))
+  
+
   let rec eval e =
     match e with
     | Num n -> Ok (VNum n)
@@ -83,24 +102,6 @@ let rec var_replace y x e =
       | Ok _ -> Error InvalidApp  
       | Error e -> Error e)
 
-    
-let rec subst value x expr =
-  match expr with
-  | Num n -> Num n
-  | True -> True
-  | False -> False
-  | Unit -> Unit
-  | Var y -> if x = y then (expr_of_value value) else Var y
-  | Bop (op, e1, e2) -> Bop (op, subst value x e1, subst value x e2)
-  | If (e1, e2, e3) -> If (subst value x e1, subst value x e2, subst value x e3)
-  | Let (y, e1, e2) -> if x = y then Let (y, subst value x e1, e2) else Let (y, subst value x e1, subst value x e2)
-  | App (e1, e2) -> App (subst value x e1, subst value x e2)
-  | Fun (y, expr) ->
-    if x = y
-    then Fun (y, expr)
-    else 
-      let y' = gensym () in
-      Fun (y', subst value x (var_replace y' y expr))
 
 let interp s =
   match parse s with
