@@ -37,13 +37,13 @@ let rec eval e =
           | Ok (VBool false) -> Ok (VBool false) 
           | Ok (VBool true) -> eval e2           
           | Ok _ -> Error (InvalidArgs op)       
-          | _ -> Error (InvalidArgs ops))
+          | _ -> Error (InvalidArgs op))
     | Or -> (
           match eval e1 with
           | Ok (VBool true) -> Ok (VBool true)
           | Ok (VBool false) -> eval e2
           | Ok _ -> Error (InvalidArgs op)
-          | _ -> Error (InvalidArgs ops))
+          | _ -> Error (InvalidArgs op))
     | _ -> (
       match (eval e1, eval e2) with
       | Ok (VNum n1), Ok (VNum n2) -> (
@@ -68,20 +68,20 @@ let rec eval e =
     | Ok (VBool true) -> eval e2
     | Ok (VBool false) -> eval e3
     | Ok _ -> Error InvalidIfCond
-    | _ -> Error (InvalidArgs ops))
+    | _ -> Error (InvalidArgs op))
   | Let (x, e1, e2) -> (
     match eval e1 with
     | Ok v -> eval (subst v x e2)
-    | _ -> Error (InvalidArgs ops))
+    | _ -> Error (InvalidArgs op))
   | Fun (x, e) -> Ok (VFun (x, e))  
   | App (e1, e2) -> (
     match eval e1 with
     | Ok (VFun (x, e)) -> (
       match eval e2 with
       | Ok v2 -> eval (subst v2 x e)
-      | _ -> Error (InvalidArgs ops))
+      | _ -> Error (InvalidArgs op))
     | Ok _ -> Error InvalidApp  
-    | _ -> Error (InvalidArgs ops))
+    | _ -> Error (InvalidArgs op))
 
 let rec subst value x expr =
   match expr with
