@@ -1,5 +1,4 @@
 open Utils
-open Par
 
 let parse s = My_parser.parse s
 
