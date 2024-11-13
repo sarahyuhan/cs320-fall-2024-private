@@ -2,6 +2,7 @@ open Utils
 open Parser
 open Lib
 
+let parse s = My_parser.parse s
 type env = (string * value) list
 
 let rec lookup env x =
@@ -90,7 +91,7 @@ let rec eval e =
     | Ok _ -> Error InvalidApp  
     | _ -> Error (InvalidArgs ops))
 
-let rec interp_expr env = function
+let rec interp_expr env =
   | Num n -> Ok (VNum n)
   | Var x -> lookup env x
   | Unit -> Ok VUnit
@@ -133,8 +134,6 @@ let rec subst value var expr =
     else 
       let y' = gensym () in
       Fun (y', subst value var (var_replace y' y expr))
-
-let parse s = My_parser.parse s
   
 let interp s =
   match parse s with
