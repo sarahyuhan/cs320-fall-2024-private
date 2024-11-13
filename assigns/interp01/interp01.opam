@@ -12,7 +12,7 @@ build: [
     "dune"
     "build"
     "-p"
-    name
+    "interp01"
     "-j"
     jobs
     "@install"
