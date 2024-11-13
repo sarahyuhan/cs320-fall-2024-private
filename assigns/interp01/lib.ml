@@ -1,16 +1,9 @@
 open Utils
-open Parser
-open Lib
+open Par
 
-let parse = My_parser.parse
-type env = (string * value) list
+let parse s = My_parser.parse s
 
-let rec lookup env x =
-  match env with
-  | [] -> Error (UnknownVar x)
-  | (y, v) :: env' -> if x = y then Ok v else lookup env' x
-
-let expr v =
+let expr_of_value v =
   match v with
   | VFun (x, e) -> Fun (x, e)
   | VNum n -> Num n
@@ -45,7 +38,7 @@ let rec eval e =
           | Ok (VBool false) -> Ok (VBool false) 
           | Ok (VBool true) -> eval e2           
           | Ok _ -> Error (InvalidArgs op)       
-          | Error e -> Error e)
+          | _ -> Error (InvalidArgs ops))
     | Or -> (
           match eval e1 with
           | Ok (VBool true) -> Ok (VBool true)
@@ -91,51 +84,25 @@ let rec eval e =
     | Ok _ -> Error InvalidApp  
     | _ -> Error (InvalidArgs ops))
 
-let rec interp_expr env =
-  | Num n -> Ok (VNum n)
-  | Var x -> lookup env x
-  | Unit -> Ok VUnit
-  | True -> Ok (VBool true)
-  | False -> Ok (VBool false)
-  | Bop (op, e1, e2) ->
-      interp_expr env e1 >>= fun v1 ->
-      interp_expr env e2 >>= fun v2 ->
-      eval_bop op v1 v2
-  | If (e1, e2, e3) ->
-      interp_expr env e1 >>= (function
-      | VBool true -> interp_expr env e2
-      | VBool false -> interp_expr env e3
-      | _ -> Error InvalidIfCond)
-  | Let (x, e1, e2) ->
-      interp_expr env e1 >>= fun v1 ->
-      interp_expr ((x, v1) :: env) e2
-  | Fun (x, e) -> Ok (VFun (x, e))
-  | App (e1, e2) ->
-      interp_expr env e1 >>= (function
-      | VFun (x, body) ->
-          interp_expr env e2 >>= fun v2 ->
-          interp_expr ((x, v2) :: env) body
-      | _ -> Error InvalidApp)
-
-let rec subst value var expr =
+let rec subst value x expr =
   match expr with
   | Num n -> Num n
   | True -> True
   | False -> False
   | Unit -> Unit
   | Var y -> if x = y then (expr_of_value value) else Var y
-  | Bop (op, e1, e2) -> Bop (op, subst value var e1, subst value var e2)
-  | If (e1, e2, e3) -> If (subst value var e1, subst value var e2, subst value var e3)
-  | Let (y, e1, e2) -> if x = y then Let (y, subst value var e1, e2) else Let (y, subst value var e1, subst value var e2)
-  | App (e1, e2) -> App (subst v x e1, subst value var e2)
+  | Bop (op, e1, e2) -> Bop (op, subst value x e1, subst value x e2)
+  | If (e1, e2, e3) -> If (subst value x e1, subst value x e2, subst value x e3)
+  | Let (y, e1, e2) -> if x = y then Let (y, subst value x e1, e2) else Let (y, subst value x e1, subst value x e2)
+  | App (e1, e2) -> App (subst value x e1, subst value x e2)
   | Fun (y, expr) ->
     if x = y
     then Fun (y, expr)
     else 
       let y' = gensym () in
-      Fun (y', subst value var (var_replace y' y expr))
-  
+      Fun (y', subst value x (var_replace y' y expr))
+
 let interp s =
   match parse s with
-  | Some expr -> eval expr
-  | None -> Error ParseFail
+    | Some expr -> eval expr
+    | None -> Error ParseFail
