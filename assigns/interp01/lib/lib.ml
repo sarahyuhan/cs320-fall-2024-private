@@ -1,6 +1,9 @@
 open Utils
 
-let parse s = My_parser.parse s
+let parse s =
+  match My_parser.parse s with
+  | Some expr -> Ok expr
+  | None -> Error ParseFail
 
 let expr_of_value v =
   match v with
@@ -103,11 +106,5 @@ let rec subst value x expr =
       | Error e -> Error e)
 
 
-let interp s =
-  match parse s with
-  | Some expr ->
-      (match eval expr with
-      | Ok v -> Ok v
-      | Error e -> Error e)
-  | None ->
-      Error ParseFail
+let interp prog =
+  interp_expr [] prog
