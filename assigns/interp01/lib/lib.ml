@@ -105,6 +105,31 @@ let rec subst value x expr =
       | Ok _ -> Error InvalidApp  
       | Error e -> Error e)
 
+let rec interp_expr env = function
+| Num n -> Ok (VNum n)
+| Var x -> lookup env x
+| Unit -> Ok VUnit
+| True -> Ok (VBool true)
+| False -> Ok (VBool false)
+| Bop (op, e1, e2) ->
+    interp_expr env e1 >>= fun v1 ->
+    interp_expr env e2 >>= fun v2 ->
+    eval_bop op v1 v2
+| If (e1, e2, e3) ->
+    interp_expr env e1 >>= (function
+    | VBool true -> interp_expr env e2
+    | VBool false -> interp_expr env e3
+    | _ -> Error InvalidIfCond)
+| Let (x, e1, e2) ->
+    interp_expr env e1 >>= fun v1 ->
+    interp_expr ((x, v1) :: env) e2
+| Fun (x, e) -> Ok (VFun (x, e))
+| App (e1, e2) ->
+    interp_expr env e1 >>= (function
+    | VFun (x, body) ->
+        interp_expr env e2 >>= fun v2 ->
+        interp_expr ((x, v2) :: env) body
+    | _ -> Error InvalidApp)
 
 let interp prog =
-  interp_expr [] prog
+interp_expr [] prog
