@@ -1,5 +1,6 @@
 open Utils
 open Parser
+open Lib
 
 type env = (string * value) list
 
