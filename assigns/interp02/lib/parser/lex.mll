@@ -14,23 +14,25 @@ rule read =
           | "then" -> THEN
           | "else" -> ELSE
           | "let" -> LET
+          | "rec" -> REC
           | "in" -> IN
           | "fun" -> FUN
           | "true" -> TRUE
           | "false" -> FALSE
+          | "int" -> INT  
           | "()" -> UNIT
           | id -> VAR id }
   | whitespace { read lexbuf }
   | eof { EOF }
-  | '+' { PLUS }
-  | '-' { MINUS }
-  | '*' { MULT }
+  | '+' { ADD }
+  | '-' { SUB }
+  | '*' { MUL }
   | '/' { DIV }
   | '%' { MOD }
   | '<' { LT }
-  | "<=" { LE }
+  | "<=" { LTE }
   | '>' { GT }
-  | ">=" { GE }
+  | ">=" { GTE }
   | '=' { EQ }
   | "<>" { NEQ }
   | "&&" { AND }
@@ -38,4 +40,5 @@ rule read =
   | '(' { LPAREN }
   | ')' { RPAREN }
   | "->" { ARROW }
+  | ':' { COLON }
   | _ { failwith "Unexpected character" }

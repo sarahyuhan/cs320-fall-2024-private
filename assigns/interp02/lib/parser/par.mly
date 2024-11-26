@@ -3,77 +3,115 @@ open Utils
 
 let rec mk_app e = function
   | [] -> e
-  | x :: es -> mk_app (App (e, x)) es
+  | x :: es -> mk_app (SApp (e, x)) es
 %}
 
 %token <int> NUM
 %token <string> VAR
-%token IF THEN ELSE LET IN FUN TRUE FALSE ARROW UNIT
-%token PLUS MINUS MULT DIV MOD
-%token LT LE GT GE EQ NEQ AND OR
-%token LPAREN RPAREN EOF
+%token UNIT
+%token TRUE
+%token FALSE
+%token INT
+%token LPAREN
+%token RPAREN
+%token ADD
+%token SUB
+%token MUL
+%token DIV
+%token MOD
+%token LT
+%token LTE
+%token GT
+%token GTE
+%token EQ
+%token NEQ
+%token AND
+%token OR
+%token IF
+%token THEN
+%token ELSE
+%token LET
+%token IN
+%token FUN
+%token ARROW
+%token COLON
+%token REC
 
-%start <Utils.prog> prog
+
+%token EOF
 
 %right OR
 %right AND
-%left LT LE GT GE EQ NEQ
-%left PLUS MINUS
-%left MULT DIV MOD
+%left LT LTE GT GTE EQ NEQ
+%left ADD SUB
+%left MUL DIV MOD
+
+%start <Utils.prog> prog
 
 %%
 
 prog:
-  | toplets EOF { $1 }
-
-toplets:
-  | toplet { [$1] }
-  | toplet toplets { $1 :: $2 }
-
-toplet:
-  | LET VAR EQ expr IN expr {
-      { is_rec = false; name = $2; args = []; ty = IntTy;
-        value = $4 }
-    }
+  | toplists EOF { $1 }
 
 expr:
-  | IF expr THEN expr ELSE expr { If ($2, $4, $6) }
-  | LET VAR EQ expr IN expr { Let ($2, $4, $6) }
-  | FUN VAR ARROW expr { Fun ($2, $4) }
+  | IF expr THEN expr ELSE expr { SIf ($2, $4, $6) }
+  | LET VAR args COLON ty EQ expr IN expr {
+      SLet { is_rec = false; name = $2; args = $3; ty = $5; value = $7; body = $9 }
+    }
+  | LET REC VAR args COLON ty EQ expr IN expr {
+      SLet { is_rec = true; name = $3; args = $4; ty = $6; value = $8; body = $10 }
+    }
+  | FUN args ARROW expr {
+      match $2 with
+      | [] -> failwith "Fail"
+      | a :: t -> SFun { arg = a; args = t; body = $4 }
+    }
   | expr2 { $1 }
 
+toplists:
+  | toplist { $1 }
+toplist:
+  | toplist toplist_item { $1 @ [$2] }
+  | toplist_item { [$1] }
+
+toplist_item:
+  | LET VAR args COLON ty EQ expr { { is_rec = false; name = $2; args = $3; ty = $5; value = $7 } }
+  | LET REC VAR args COLON ty EQ expr { { is_rec = true; name = $3; args = $4; ty = $6; value = $8 } }
+
+args:
+  | LPAREN VAR COLON ty RPAREN args { ($2, $4) :: $6 }
+  | { [] }
+
+
+%inline bop:
+  | ADD { Add }
+  | SUB { Sub }
+  | MUL { Mul }
+  | DIV { Div }
+  | MOD { Mod }
+  | LT { Lt }
+  | LTE { Lte }
+  | GT { Gt }
+  | GTE { Gte }
+  | EQ { Eq }
+  | NEQ { Neq }
+  | AND { And }
+  | OR { Or }
+
 expr2:
-  | expr2 PLUS expr3 { Bop (Add, $1, $3) }
-  | expr2 MINUS expr3 { Bop (Sub, $1, $3) }
-  | expr3 { $1 }
+  | e1 = expr2 op = bop e2 = expr2 { SBop (op, e1, e2) }
+  | e = expr3 es = expr3* { mk_app e es }
 
 expr3:
-  | expr3 MULT expr4 { Bop (Mul, $1, $3) }
-  | expr3 DIV expr4 { Bop (Div, $1, $3) }
-  | expr3 MOD expr4 { Bop (Mod, $1, $3) }
-  | expr4 { $1 }
+  | UNIT { SUnit }
+  | TRUE { STrue }
+  | FALSE { SFalse }
+  | n = NUM { SNum n }
+  | x = VAR { SVar x }
+  | LPAREN e = expr RPAREN { e }
 
-expr4:
-  | expr4 LT expr5 { Bop (Lt, $1, $3) }
-  | expr4 LE expr5 { Bop (Lte, $1, $3) }
-  | expr4 GT expr5 { Bop (Gt, $1, $3) }
-  | expr4 GE expr5 { Bop (Gte, $1, $3) }
-  | expr4 EQ expr5 { Bop (Eq, $1, $3) }
-  | expr4 NEQ expr5 { Bop (Neq, $1, $3) }
-  | expr5 { $1 }
-
-expr5:
-  | expr5 AND expr6 { Bop (And, $1, $3) }
-  | expr5 OR expr6 { Bop (Or, $1, $3) }
-  | expr6 { $1 }
-
-expr6:
-  | expr6 expr7 { mk_app $1 [$2] }
-  | expr7 { $1 }
-
-expr7:
-  | NUM { Num $1 }
-  | VAR { Var $1 }
-  | TRUE { True }
-  | FALSE { False }
-  | LPAREN expr RPAREN { $2 }
+ty:
+  | INT { IntTy }
+  | UNIT { UnitTy }
+  | ty ARROW ty { FunTy ($1, $3) }
+  | LPAREN ty RPAREN { $2 }
