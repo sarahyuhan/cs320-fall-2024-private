@@ -1,113 +1,97 @@
 open Utils
 open My_parser
 
-let parse = My_parser.parse
+let parse s =
+  match My_parser.parse s with
+  | Some e -> Ok e
+  | None -> Error ParseFail
 
-let desugar prog =
-  let rec desugar_expr = function
-    | Prog [] -> Unit
-    | Prog (hd :: tl) -> 
-        (match hd with
-        | TopLet (x, args, ty, e) -> 
-            Let (x, 
-                 List.fold_right 
-                   (fun (arg, ty) acc -> Fun (arg, acc)) 
-                   args 
-                   (desugar_expr e), 
-                 desugar_expr (Prog tl))
-        | TopLetRec (x, args, ty, e) -> 
-            LetRec (x, 
-                    List.fold_right 
-                      (fun (arg, ty) acc -> Fun (arg, acc)) 
-                      args 
-                      (desugar_expr e), 
-                    desugar_expr (Prog tl)))
-  in
-  desugar_expr prog
+let expr_of_value v =
+  match v with
+  | VFun (x, e) -> Fun (x, e)
+  | VNum n -> Num n
+  | VBool true -> True
+  | VBool false -> False
+  | VUnit -> Unit
 
-let type_of expr =
-  let rec infer_type env = function
-    | Num _ -> Ok TInt
-    | True | False -> Ok TBool
-    | Unit -> Ok TUnit
-    | Var x -> 
-        (match List.assoc_opt x env with
-         | Some ty -> Ok ty
-         | None -> Error (UnknownVar x))
-    | Bop (op, e1, e2) -> 
-        infer_type env e1 >>= fun t1 ->
-        infer_type env e2 >>= fun t2 ->
-        (match (op, t1, t2) with
-         | (Add, TInt, TInt) | (Sub, TInt, TInt) | (Mul, TInt, TInt)
-         | (Div, TInt, TInt) | (Mod, TInt, TInt) -> Ok TInt
-         | (And, TBool, TBool) | (Or, TBool, TBool) -> Ok TBool
-         | _ -> Error (OpTyErrR (op, t1, t2)))
-    | If (cond, t1, t2) ->
-        infer_type env cond >>= fun tcond ->
-        (if tcond <> TBool then Error (IfCondTyErr tcond)
-         else
-           infer_type env t1 >>= fun tthen ->
-           infer_type env t2 >>= fun telse ->
-           if tthen = telse then Ok tthen
-           else Error (IfTyErr (tthen, telse)))
-    | Let (x, e1, e2) -> 
-        infer_type env e1 >>= fun ty ->
-        infer_type ((x, ty) :: env) e2
-    | Fun (arg, body) -> 
-        (match arg with
-         | (x, t) -> infer_type ((x, t) :: env) body >>= fun tbody ->
-                     Ok (TFun (t, tbody)))
-    | App (f, arg) -> 
-        infer_type env f >>= fun tf ->
-        infer_type env arg >>= fun targ ->
-        (match tf with
-         | TFun (t1, t2) when t1 = targ -> Ok t2
-         | TFun (t1, _) -> Error (FunArgTyErr (t1, targ))
-         | _ -> Error (FunAppTyErr tf))
-    | Assert e ->
-        infer_type env e >>= fun t ->
-        if t = TBool then Ok TUnit
-        else Error (AssertTyErr t)
-  in
-  infer_type [] expr
+let rec var_replace y x e =
+  match e with
+  | Num n -> Num n
+  | True -> True
+  | False -> False
+  | Unit -> Unit
+  | Var z -> if z = x then Var y else Var z
+  | Bop (op, e1, e2) -> Bop (op, var_replace y x e1, var_replace y x e2)
+  | If (e1, e2, e3) -> If (var_replace y x e1, var_replace y x e2, var_replace y x e3)
+  | Let (z, e1, e2) ->
+      if z = x then Let (z, var_replace y x e1, e2)
+      else Let (z, var_replace y x e1, var_replace y x e2)
+  | App (e1, e2) -> App (var_replace y x e1, var_replace y x e2)
+  | Fun (z, e) -> if z = x then Fun (z, e) else Fun (z, var_replace y x e)
 
-let rec eval env = function
-  | Num n -> VNum n
-  | True -> VBool true
-  | False -> VBool false
-  | Unit -> VUnit
-  | Var x -> List.assoc x env
-  | Bop (op, e1, e2) -> 
-      let v1 = eval env e1 in
-      let v2 = eval env e2 in
-      eval_bop op v1 v2
-  | If (cond, t1, t2) ->
-      (match eval env cond with
-       | VBool true -> eval env t1
-       | VBool false -> eval env t2
-       | _ -> raise (Failure "Invalid"))
-  | Let (x, e1, e2) ->
-      let v1 = eval env e1 in
-      eval ((x, v1) :: env) e2
-  | Fun (arg, body) -> VClosure (env, arg, body)
-  | App (f, arg) ->
-      let vf = eval env f in
-      let va = eval env arg in
-      (match vf with
-       | VClosure (env', (x, _), body) ->
-           eval ((x, va) :: env') body
-       | _ -> raise (Failure "Invalid"))
-  | Assert e ->
-      (match eval env e with
-       | VBool true -> VUnit
-       | VBool false -> raise AssertFail
-       | _ -> raise (Failure "Invalid"))
+let rec subst value x expr =
+  match expr with
+  | Num n -> Num n
+  | True -> True
+  | False -> False
+  | Unit -> Unit
+  | Var y -> if x = y then expr_of_value value else Var y
+  | Bop (op, e1, e2) -> Bop (op, subst value x e1, subst value x e2)
+  | If (e1, e2, e3) -> If (subst value x e1, subst value x e2, subst value x e3)
+  | Let (y, e1, e2) ->
+      if x = y then Let (y, subst value x e1, e2)
+      else Let (y, subst value x e1, subst value x e2)
+  | App (e1, e2) -> App (subst value x e1, subst value x e2)
+  | Fun (y, e) ->
+      if x = y then Fun (y, e)
+      else
+        let y' = gensym () in
+        Fun (y', subst value x (var_replace y' y e))
 
+let rec eval expr =
+  match expr with
+  | Num n -> Ok (VNum n)
+  | True -> Ok (VBool true)
+  | False -> Ok (VBool false)
+  | Unit -> Ok VUnit
+  | Var x -> Error (UnknownVar x)
+  | Bop (op, e1, e2) -> (
+      match eval e1, eval e2 with
+      | Ok (VNum n1), Ok (VNum n2) -> eval_bop op (VNum n1) (VNum n2)
+      | Ok (VBool b1), Ok (VBool b2) -> eval_bop op (VBool b1) (VBool b2)
+      | Ok _, Ok _ -> Error (InvalidArgs op)
+      | Error e, _ -> Error e
+      | _, Error e -> Error e)
+  | If (cond, e1, e2) -> (
+      match eval cond with
+      | Ok (VBool true) -> eval e1
+      | Ok (VBool false) -> eval e2
+      | Ok _ -> Error InvalidIfCond
+      | Error e -> Error e)
+  | Let (x, e1, e2) -> (
+      match eval e1 with
+      | Ok v1 -> eval (subst v1 x e2)
+      | Error e -> Error e)
+  | Fun (x, body) -> Ok (VFun (x, body))
+  | App (e1, e2) -> (
+      match eval e1 with
+      | Ok (VFun (x, body)) -> (
+          match eval e2 with
+          | Ok v2 -> eval (subst v2 x body)
+          | Error e -> Error e)
+      | Ok _ -> Error InvalidApp
+      | Error e -> Error e)
 let interp s =
   match parse s with
-  | Some prog ->
-      let expr = desugar prog in
-      (match type_of expr with
-       | Ok _ -> Ok (eval [] expr)
-       | Error err -> Error err)
-  | None -> Error ParseFail
+  | Ok toplets ->
+      List.fold_left
+        (fun acc toplet ->
+            match acc with
+            | Error _ as e -> e
+            | Ok _ ->
+                eval toplet.value >>= fun v ->
+                Ok v)
+        (Ok VUnit)
+        toplets
+  | Error e -> Error e
+      

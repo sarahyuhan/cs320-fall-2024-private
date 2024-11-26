@@ -1,7 +1,35 @@
 open Utils
 open My_parser
 
-let parse = My_parser.parse
+(* Parsing *)
+let parse s =
+  match My_parser.parse s with
+  | Some e -> Ok e
+  | None -> Error ParseFail
+
+(* Substitution Helpers *)
+let expr_of_value v =
+  match v with
+  | VFun (x, e) -> Fun (x, e)
+  | VNum n -> Num n
+  | VBool true -> True
+  | VBool false -> False
+  | VUnit -> Unit
+
+let rec var_replace y x e =
+  match e with
+  | Num n -> Num n
+  | True -> True
+  | False -> False
+  | Unit -> Unit
+  | Var z -> if z = x then Var y else Var z
+  | Bop (op, e1, e2) -> Bop (op, var_replace y x e1, var_replace y x e2)
+  | If (e1, e2, e3) -> If (var_replace y x e1, var_replace y x e2, var_replace y x e3)
+  | Let (z, e1, e2) ->
+      if z = x then Let (z, var_replace y x e1, e2)
+      else Let (z, var_replace y x e1, var_replace y x e2)
+  | App (e1, e2) -> App (var_replace y x e1, var_replace y x e2)
+  | Fun (z, e) -> if z = x then Fun (z, e) else Fun (z, var_replace y x e)
 
 let rec subst value x expr =
   match expr with
@@ -16,29 +44,13 @@ let rec subst value x expr =
       if x = y then Let (y, subst value x e1, e2)
       else Let (y, subst value x e1, subst value x e2)
   | App (e1, e2) -> App (subst value x e1, subst value x e2)
-  | Fun (y, body) ->
-      if x = y then Fun (y, body)
+  | Fun (y, e) ->
+      if x = y then Fun (y, e)
       else
         let y' = gensym () in
-        Fun (y', subst value x (var_replace y' y body))
+        Fun (y', subst value x (var_replace y' y e))
 
-and var_replace y x expr =
-  match expr with
-  | Num n -> Num n
-  | True -> True
-  | False -> False
-  | Unit -> Unit
-  | Var z -> if z = x then Var y else Var z
-  | Bop (op, e1, e2) -> Bop (op, var_replace y x e1, var_replace y x e2)
-  | If (e1, e2, e3) ->
-      If (var_replace y x e1, var_replace y x e2, var_replace y x e3)
-  | Let (z, e1, e2) ->
-      if z = x then Let (z, var_replace y x e1, e2)
-      else Let (z, var_replace y x e1, var_replace y x e2)
-  | App (e1, e2) -> App (var_replace y x e1, var_replace y x e2)
-  | Fun (z, body) ->
-      if z = x then Fun (z, body) else Fun (z, var_replace y x body)
-
+(* Evaluation *)
 let rec eval expr =
   match expr with
   | Num n -> Ok (VNum n)
@@ -73,7 +85,8 @@ let rec eval expr =
       | Ok _ -> Error InvalidApp
       | Error e -> Error e)
 
+(* Interpreter *)
 let interp s =
   match parse s with
-  | Some expr -> eval expr
-  | None -> Error ParseFail
+  | Ok expr -> eval expr
+  | Error e -> Error e

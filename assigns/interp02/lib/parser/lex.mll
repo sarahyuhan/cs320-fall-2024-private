@@ -8,32 +8,34 @@ let var = ['a'-'z' '_'] ['a'-'z' 'A'-'Z' '0'-'9' '_' '\'']*
 
 rule read =
   parse
-  | "()" { UNIT }
-  | "true" { TRUE }
-  | "false" { FALSE }
-  | "(" { LPAREN }
-  | ")" { RPAREN }
-  | "+" { ADD }
-  | "-" { SUB }
-  | "*" { MUL }
-  | "/" { DIV }
-  | "mod" { MOD }
-  | "<" { LT }
-  | "<=" { LTE }
-  | ">" { GT }
-  | ">=" { GTE }
-  | "=" { EQ }
+  | num { NUM (int_of_string (Lexing.lexeme lexbuf)) }
+  | var { match Lexing.lexeme lexbuf with
+          | "if" -> IF
+          | "then" -> THEN
+          | "else" -> ELSE
+          | "let" -> LET
+          | "in" -> IN
+          | "fun" -> FUN
+          | "true" -> TRUE
+          | "false" -> FALSE
+          | "()" -> UNIT
+          | id -> VAR id }
+  | whitespace { read lexbuf }
+  | eof { EOF }
+  | '+' { PLUS }
+  | '-' { MINUS }
+  | '*' { MULT }
+  | '/' { DIV }
+  | '%' { MOD }
+  | '<' { LT }
+  | "<=" { LE }
+  | '>' { GT }
+  | ">=" { GE }
+  | '=' { EQ }
   | "<>" { NEQ }
   | "&&" { AND }
   | "||" { OR }
-  | "if" { IF }
-  | "then" { THEN }
-  | "else" { ELSE }
-  | "let" { LET }
-  | "in" { IN }
-  | "fun" { FUN }
+  | '(' { LPAREN }
+  | ')' { RPAREN }
   | "->" { ARROW }
-  | num { NUM (int_of_string (Lexing.lexeme lexbuf)) }
-  | var { VAR (Lexing.lexeme lexbuf) }
-  | whitespace { read lexbuf }
-  | eof { EOF }
+  | _ { failwith "Unexpected character" }
