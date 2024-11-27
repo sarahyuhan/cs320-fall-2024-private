@@ -94,7 +94,6 @@ let desugar prog =
 
   in
   desugar_ty prog
-        
 
 let type_of e =
   let rec go env e =
@@ -140,7 +139,7 @@ let type_of e =
           | Ok (FunTy (t1, t2)), Ok t3 when t1 = t3 -> Ok t2
           | Ok (FunTy (t1, _)), Ok t2 -> Error (FunArgTyErr (t1, t2))
           | Ok t, _ -> Error (FunAppTyErr t)
-          | Error e, _ | _, Error e -> Error e)
+          | Error e, _ -> Error e)
     | Let { is_rec; name; ty; value; body } ->
         let env' = Env.add name ty env in
         let env'' = if is_rec then env' else env in
@@ -155,78 +154,81 @@ let type_of e =
           | Error e -> Error e)
   in
   go Env.empty e    
-
-  
+        
 let eval e =
   let rec go env e =
     match e with
-    | Num n -> Ok (VNum n)
-    | True -> Ok (VBool true)
-    | False -> Ok (VBool false)
-    | Unit -> Ok VUnit
-    | Var x -> (
-        match Env.find_opt x env with
-        | Some v -> Ok v
-        | None -> Error (UnknownVar x))
-    | If (cond, e1, e2) -> (
-        match go env cond with
-        | Ok (VBool true) -> go env e1
-        | Ok (VBool false) -> go env e2
-        | Ok _ -> Error (IfCondTyErr BoolTy)
-        | Error e -> Error e)
+    | Unit -> VUnit
+    | True -> VBool true
+    | False -> VBool false
+    | Num n -> VNum n
+    | Var x -> Env.find x env
+    | If (e1, e2, e3) ->
+        (match go env e1 with
+        | VBool true -> go env e2
+        | VBool false -> go env e3
+        | _ -> failwith "")
     | Bop (op, e1, e2) ->
         let v1 = go env e1 in
         let v2 = go env e2 in
         (match op, v1, v2 with
-        | Add, Ok (VNum n1), Ok (VNum n2) -> Ok (VNum (n1 + n2))
-        | Sub, Ok (VNum n1), Ok (VNum n2) -> Ok (VNum (n1 - n2))
-        | Mul, Ok (VNum n1), Ok (VNum n2) -> Ok (VNum (n1 * n2))
-        | Div, Ok (VNum n1), Ok (VNum n2) when n2 = 0 -> Error DivByZero
-        | Div, Ok (VNum n1), Ok (VNum n2) -> Ok (VNum (n1 / n2))
-        | Mod, Ok (VNum n1), Ok (VNum n2) when n2 = 0 -> Error DivByZero
-        | Mod, Ok (VNum n1), Ok (VNum n2) -> Ok (VNum (n1 mod n2))
-        | Lt, Ok (VNum n1), Ok (VNum n2) -> Ok (VBool (n1 < n2))
-        | Lte, Ok (VNum n1), Ok (VNum n2) -> Ok (VBool (n1 <= n2))
-        | Gt, Ok (VNum n1), Ok (VNum n2) -> Ok (VBool (n1 > n2))
-        | Gte, Ok (VNum n1), Ok (VNum n2) -> Ok (VBool (n1 >= n2))
-        | Eq, Ok (VNum n1), Ok (VNum n2) -> Ok (VBool (n1 = n2))
-        | Neq, Ok (VNum n1), Ok (VNum n2) -> Ok (VBool (n1 <> n2))
-        | And, Ok (VBool b1), Ok (VBool b2) -> Ok (VBool (b1 && b2))
-        | Or, Ok (VBool b1), Ok (VBool b2) -> Ok (VBool (b1 || b2))
-        | _, Error e, _ | _, _, Error e -> Error e
-        | _ -> failwith "Invalid operation")
-    | Fun (arg, ty, body) -> Ok (VClos { name = None; arg; body; env })
-    | App (e1, e2) -> (
-        match go env e1 with
-        | Ok (VClos { arg; body; env = env' }) -> (
-            match go env e2 with
-            | Ok v -> go (Env.add arg v env') body
-            | Error e -> Error e)
-        | Ok _ -> Error (FunAppTyErr BoolTy)
-        | Error e -> Error e)
-    | Assert e1 -> (
-        match go env e1 with
-        | Ok (VBool true) -> Ok VUnit
-        | Ok (VBool false) -> Error (AssertTyErr BoolTy)
-        | Ok _ -> Error (AssertTyErr BoolTy)
-        | Error e -> Error e)
+        | Add, VNum n1, VNum n2 -> VNum (n1 + n2)
+        | Sub, VNum n1, VNum n2 -> VNum (n1 - n2)
+        | Mul, VNum n1, VNum n2 -> VNum (n1 * n2)
+        | Div, VNum n1, VNum n2 ->
+            if n2 = 0 then raise DivByZero
+            else VNum (n1 / n2)
+        | Mod, VNum n1, VNum n2 ->
+            if n2 = 0 then raise DivByZero
+            else VNum (n1 mod n2)
+        | Lt, VNum n1, VNum n2 -> VBool (n1 < n2)
+        | Lte, VNum n1, VNum n2 -> VBool (n1 <= n2)
+        | Gt, VNum n1, VNum n2 -> VBool (n1 > n2)
+        | Gte, VNum n1, VNum n2 -> VBool (n1 >= n2)
+        | Eq, VNum n1, VNum n2 -> VBool (n1 = n2)
+        | Neq, VNum n1, VNum n2 -> VBool (n1 <> n2)
+        | And, VBool b1, VBool b2 -> VBool (b1 && b2)
+        | Or, VBool b1, VBool b2 -> VBool (b1 || b2)
+        | _ -> failwith "")
+    | Fun (arg, _, e) -> VClos { name = None; arg; body = e; env }
+    | App (e1, e2) ->
+        let v1 = go env e1 in
+        let v2 = go env e2 in
+        (match v1 with
+        | VClos { name; arg; body; env = env' } ->
+            let env'' =
+              match name with
+              | Some f -> Env.add f v1 env'
+              | None -> env'
+            in
+            go (Env.add arg v2 env'') body
+        | _ -> failwith "")
     | Let { is_rec; name; ty = _; value; body } ->
-      let v1 = go env value in
-      (match v1 with
-      | Ok v ->
-          let env' = if is_rec then Env.add name v env else Env.add name v env in
-          go env' body
-      | Error e -> Error e)
+        let v1 =
+          if is_rec then
+            match value with
+            | Fun (arg, _, e) ->
+                let rec_clos = VClos { name = Some name; arg; body = e; env } in
+                let env' = Env.add name rec_clos env in
+                VClos { name = Some name; arg; body = e; env = env' }
+            | _ -> go env value
+          else go env value
+        in
+        go (Env.add name v1 env) body
+    | Assert e ->
+        (match go env e with
+        | VBool true -> VUnit
+        | VBool false -> raise AssertFail
+        | _ -> failwith "")
   in
   go Env.empty e
   
-  
-
-  let interp str =
-    match parse str with
-    | Ok prog -> 
-        let expr = desugar prog in
-        (match type_of expr with
-         | Ok _ -> eval expr
-         | Error e -> Error e)
-    | Error e -> Error e  
+let interp str =
+  match parse str with
+  | Ok prog -> (
+      let expr = desugar prog in
+      match type_of expr with
+      | Ok _ -> eval expr
+      | Error e -> failwith (err_msg e)
+    )
+  | Error e -> failwith (err_msg e)
