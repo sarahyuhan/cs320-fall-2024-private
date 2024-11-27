@@ -1,10 +1,12 @@
 open Utils
 open My_parser
+exception AssertFail
+exception DivByZero
 
 let parse s =
-  let lexbuf = Lexing.from_string s in
-  try Some (Par.prog Lex.read (Lexing.from_string s))
-  with _ -> None
+  match My_parser.parse s with
+  | Some e -> Ok e
+  | None -> Error ParseErr
 
 let desugar prog =
   let rec desugar_ty toplets =
@@ -120,7 +122,7 @@ let type_of e =
               (match op with
               | Add | Sub | Mul | Div | Mod -> Ok IntTy
               | Lt | Lte | Gt | Gte | Eq | Neq -> Ok BoolTy
-              | And | Or -> Error (OpTyErr (op, IntTy, IntTy)))
+              | And | Or -> Error (OpTyErrR (op, IntTy, IntTy)))
           | Ok BoolTy, Ok BoolTy ->
               (match op with
               | And | Or -> Ok BoolTy
@@ -152,82 +154,79 @@ let type_of e =
           | Ok t -> Error (AssertTyErr t)
           | Error e -> Error e)
   in
-  go Env.empty e        
+  go Env.empty e    
+
   
-let eval_bop op v1 v2 =
-  match op, v1, v2 with
-  | Add, VNum n1, VNum n2 -> Ok (VNum (n1 + n2))
-  | Sub, VNum n1, VNum n2 -> Ok (VNum (n1 - n2))
-  | Mul, VNum n1, VNum n2 -> Ok (VNum (n1 * n2))
-  | Div, VNum n1, VNum n2 -> 
-      if n2 = 0 then Error DivByZero else Ok (VNum (n1 / n2))
-  | Mod, VNum n1, VNum n2 -> 
-      if n2 = 0 then Error DivByZero else Ok (VNum (n1 mod n2))
-  | Lt, VNum n1, VNum n2 -> Ok (VBool (n1 < n2))
-  | Lte, VNum n1, VNum n2 -> Ok (VBool (n1 <= n2))
-  | Gt, VNum n1, VNum n2 -> Ok (VBool (n1 > n2))
-  | Gte, VNum n1, VNum n2 -> Ok (VBool (n1 >= n2))
-  | Eq, VNum n1, VNum n2 -> Ok (VBool (n1 = n2))
-  | Neq, VNum n1, VNum n2 -> Ok (VBool (n1 <> n2))
-  | And, VBool b1, VBool b2 -> Ok (VBool (b1 && b2))
-  | Or, VBool b1, VBool b2 -> Ok (VBool (b1 || b2))
-  | _ -> Error (InvalidArgs op)
-
-
-let rec eval expr =
-  match expr with
-  | Num n -> Ok (VNum n)
-  | True -> Ok (VBool true)
-  | False -> Ok (VBool false)
-  | Unit -> Ok VUnit
-  | Var x -> Error (UnknownVar x)
-  | Bop (op, e1, e2) -> (
-      match eval e1, eval e2 with
-      | Ok (VNum n1), Ok (VNum n2) -> eval_bop op (VNum n1) (VNum n2)
-      | Ok (VBool b1), Ok (VBool b2) -> eval_bop op (VBool b1) (VBool b2)
-      | Ok _, Ok _ -> Error (InvalidArgs op)
-      | Error e, _ -> Error e
-      | _, Error e -> Error e)
-  | If (cond, e1, e2) -> (
-      match eval cond with
-      | Ok (VBool true) -> eval e1
-      | Ok (VBool false) -> eval e2
-      | Ok _ -> Error InvalidIfCond
-      | Error e -> Error e)
-  | Let { is_rec; name = x; ty; value = e1; body = e2 } -> (
-      match eval e1 with
-      | Ok v1 -> eval (subst v1 x e2)
-      | Error e -> Error e)
-  | Fun (x, ty, body) -> Ok (VFun { name = None; arg = x; body = body; env = [] })
-  | App (e1, e2) -> (
-      match eval e1 with
-      | Ok (VFun (x, body)) -> (
-          match eval e2 with
-          | Ok v2 -> eval (subst v2 x body)
-          | Error e -> Error e)
-      | Ok _ -> Error InvalidApp
-      | Error e -> Error e)
-  | Bop (op, e1, e2) -> (
-    match eval e1, eval e2 with
-    | Ok (VNum n1), Ok (VNum n2) -> eval_bop op (VNum n1) (VNum n2)
-    | Ok (VBool b1), Ok (VBool b2) -> eval_bop op (VBool b1) (VBool b2)
-    | Ok _, Ok _ -> Error (InvalidArgs op)
-    | Error e, _ -> Error e
-    | _, Error e -> Error e
-)    
-  | Assert e1 -> (
-      match eval e1 with
-      | Ok (VBool true) -> Ok VUnit
-      | Ok (VBool false) -> Error (AssertTyErr BoolTy)
-      | Ok _ -> Error (AssertTyErr BoolTy)
-      | Error e -> Error e)
-  
-
-let interp str =
-  match parse str with
-  | Some prog ->
-      let expr = desugar prog in
-      (match type_of expr with
-        | Ok _ -> Ok (eval expr)
+let eval e =
+  let rec go env e =
+    match e with
+    | Num n -> Ok (VNum n)
+    | True -> Ok (VBool true)
+    | False -> Ok (VBool false)
+    | Unit -> Ok VUnit
+    | Var x -> (
+        match Env.find_opt x env with
+        | Some v -> Ok v
+        | None -> Error (UnknownVar x))
+    | If (cond, e1, e2) -> (
+        match go env cond with
+        | Ok (VBool true) -> go env e1
+        | Ok (VBool false) -> go env e2
+        | Ok _ -> Error (IfCondTyErr BoolTy)
         | Error e -> Error e)
-  | None -> Error ParseErr
+    | Bop (op, e1, e2) ->
+        let v1 = go env e1 in
+        let v2 = go env e2 in
+        (match op, v1, v2 with
+        | Add, Ok (VNum n1), Ok (VNum n2) -> Ok (VNum (n1 + n2))
+        | Sub, Ok (VNum n1), Ok (VNum n2) -> Ok (VNum (n1 - n2))
+        | Mul, Ok (VNum n1), Ok (VNum n2) -> Ok (VNum (n1 * n2))
+        | Div, Ok (VNum n1), Ok (VNum n2) when n2 = 0 -> Error DivByZero
+        | Div, Ok (VNum n1), Ok (VNum n2) -> Ok (VNum (n1 / n2))
+        | Mod, Ok (VNum n1), Ok (VNum n2) when n2 = 0 -> Error DivByZero
+        | Mod, Ok (VNum n1), Ok (VNum n2) -> Ok (VNum (n1 mod n2))
+        | Lt, Ok (VNum n1), Ok (VNum n2) -> Ok (VBool (n1 < n2))
+        | Lte, Ok (VNum n1), Ok (VNum n2) -> Ok (VBool (n1 <= n2))
+        | Gt, Ok (VNum n1), Ok (VNum n2) -> Ok (VBool (n1 > n2))
+        | Gte, Ok (VNum n1), Ok (VNum n2) -> Ok (VBool (n1 >= n2))
+        | Eq, Ok (VNum n1), Ok (VNum n2) -> Ok (VBool (n1 = n2))
+        | Neq, Ok (VNum n1), Ok (VNum n2) -> Ok (VBool (n1 <> n2))
+        | And, Ok (VBool b1), Ok (VBool b2) -> Ok (VBool (b1 && b2))
+        | Or, Ok (VBool b1), Ok (VBool b2) -> Ok (VBool (b1 || b2))
+        | _, Error e, _ | _, _, Error e -> Error e
+        | _ -> failwith "Invalid operation")
+    | Fun (arg, ty, body) -> Ok (VClos { name = None; arg; body; env })
+    | App (e1, e2) -> (
+        match go env e1 with
+        | Ok (VClos { arg; body; env = env' }) -> (
+            match go env e2 with
+            | Ok v -> go (Env.add arg v env') body
+            | Error e -> Error e)
+        | Ok _ -> Error (FunAppTyErr BoolTy)
+        | Error e -> Error e)
+    | Assert e1 -> (
+        match go env e1 with
+        | Ok (VBool true) -> Ok VUnit
+        | Ok (VBool false) -> Error (AssertTyErr BoolTy)
+        | Ok _ -> Error (AssertTyErr BoolTy)
+        | Error e -> Error e)
+    | Let { is_rec; name; ty = _; value; body } ->
+      let v1 = go env value in
+      (match v1 with
+      | Ok v ->
+          let env' = if is_rec then Env.add name v env else Env.add name v env in
+          go env' body
+      | Error e -> Error e)
+  in
+  go Env.empty e
+  
+  
+
+  let interp str =
+    match parse str with
+    | Ok prog -> 
+        let expr = desugar prog in
+        (match type_of expr with
+         | Ok _ -> eval expr
+         | Error e -> Error e)
+    | Error e -> Error e  

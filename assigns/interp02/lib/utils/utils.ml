@@ -114,6 +114,7 @@ type error =
   | FunAppTyErr of ty
   | LetTyErr of ty * ty
   | AssertTyErr of ty
+  | DivByZero
 
 let err_msg = function
   | ParseErr -> "parse error"
@@ -159,4 +160,5 @@ let err_msg = function
     "argument of assert has type "
     ^ string_of_ty ty
     ^ " but an expression was expected of type bool"
+  | DivByZero -> "division by zero error"
 
