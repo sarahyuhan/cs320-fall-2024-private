@@ -3,7 +3,8 @@ open Utils
 exception AssertFail
 exception DivByZero
 
-let parse s = My_parser.parse s 
+let parse (s : string) : prog option =
+  My_parser.parse s
 
 let desugar program =
   let rec desugar_ty top_defs =
