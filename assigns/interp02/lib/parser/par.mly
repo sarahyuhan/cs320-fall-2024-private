@@ -69,8 +69,7 @@ expr:
   | expr2 { $1 }
 
 toplists:
-  | toplist EOF { $1 }
-
+  | toplist { $1 }
 toplist:
   | toplist toplist_item { $1 @ [$2] }
   | toplist_item { [$1] }
@@ -100,12 +99,8 @@ args:
   | OR { Or }
 
 expr2:
-  | expr3 bop_expr_tail { $2 }
-
-bop_expr_tail:
-  | op = bop e = expr3 rest = bop_expr_tail { SBop (op, e, rest) }
-  | e = expr3 { e }
-
+  | e1 = expr2 op = bop e2 = expr2 { SBop (op, e1, e2) }
+  | e = expr3 es = expr3* { mk_app e es }
 
 expr3:
   | UNIT { SUnit }
@@ -116,9 +111,7 @@ expr3:
   | LPAREN e = expr RPAREN { e }
 
 ty:
-  | primary_ty ARROW ty { FunTy ($1, $3) }
-  | primary_ty { $1 }
-primary_ty:
   | INT { IntTy }
   | UNIT { UnitTy }
+  | ty ARROW ty { FunTy ($1, $3) }
   | LPAREN ty RPAREN { $2 }
