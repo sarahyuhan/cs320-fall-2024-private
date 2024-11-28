@@ -220,11 +220,11 @@ let eval expr =
        | _ -> failwith "")
   in evaluate Env.empty expr
 
-let interp str =
-  match parse str with
-  | Some program ->
-    let expr = desugar program in
-    (match type_of expr with
-     | Ok _ -> Ok (eval expr)
-     | Error e -> Error e)
-  | None -> Error ParseErr
+  let interp str =
+    match parse str with
+    | Some program ->
+      let expr = desugar program in
+      (match type_of expr with
+       | Ok _ -> Ok (eval expr)
+       | Error e -> Error e)
+    | None -> Error ParseErr
