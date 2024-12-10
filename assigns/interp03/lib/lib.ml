@@ -263,8 +263,8 @@ let type_of (ctx: stc_env) (e: expr) : ty_scheme option =
   let cs = st'.constraints in
   match unify t cs with
   | None -> None
-  | Some (Forall(_, t')) ->
-    Some (generalize ctx t')
+  | Some scheme -> Some scheme
+
 
 exception AssertFail
 exception DivByZero
