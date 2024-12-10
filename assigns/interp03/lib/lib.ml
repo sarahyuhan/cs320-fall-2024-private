@@ -399,26 +399,29 @@ let rec eval_expr (env: dyn_env) (e: expr) : value =
     let v1 = eval_expr env e1 in
     let v2 = eval_expr env e2 in
     (match v1 with
-     | VClos {name;arg;body;env=clos_env} ->
-       let env' = Env.add arg v2 clos_env in
-       (match name with
-        | Some _ -> raise RecWithoutArg
-        | None -> eval_expr env' body)
-     | _ -> failwith "application to non-function")
-  | Let {is_rec;name;value;body} ->
-    if not is_rec then
-      let v_val = eval_expr env value in
-      let env' = Env.add name v_val env in
-      eval_expr env' body
-    else
-      let v_val = eval_expr env value in
-      (match v_val with
-      | VClos c ->
-        let v_rec = VClos { c with name = Some name } in
-        let env' = Env.add name v_rec env in
+      | VClos {name=_name;arg;body;env=clos_env} ->
+        let env' = Env.add arg v2 clos_env in
         eval_expr env' body
-      | _ -> raise RecWithoutArg
-    )
+      | _ -> failwith "application to non-function")
+  | Let {is_rec; name; value; body} ->
+  let v_val = eval_expr env value in
+  if not is_rec then
+    (* Non-recursive let: just bind the value and continue *)
+    let env' = Env.add name v_val env in
+    eval_expr env' body
+  else
+    (* Recursive let: If it's a closure, update its name. Otherwise, just bind the value. *)
+    let v_val =
+      match v_val with
+      | VClos c ->
+          VClos { c with name = Some name }
+      | _ ->
+          (* Here we allow non-function recursive bindings. 
+              This is unusual but will not raise an exception. *)
+          v_val
+    in
+    let env' = Env.add name v_val env in
+    eval_expr env' body
   | ListMatch {matched;hd_name;tl_name;cons_case;nil_case} ->
     let vm = eval_expr env matched in
     (match vm with
