@@ -258,12 +258,6 @@ let rec infer_expr (st: inference_state) (e: expr) : ty * inference_state =
     let (t_case, st_case) = infer_expr st_pair case in
     (t_case, {st_case with env=st.env})
 
-let rec list_combine l1 l2 =
-  match (l1, l2) with
-  | ([], []) -> []
-  | (x1::xs1, x2::xs2) -> (x1, x2) :: list_combine xs1 xs2
-  | _ -> failwith "list_combine: lists must have the same length"
-
 let type_of (ctx: stc_env) (e: expr) : ty_scheme option =
   let (t, st') = infer_expr {env=ctx; constraints=[]} e in
   let cs = st'.constraints in
