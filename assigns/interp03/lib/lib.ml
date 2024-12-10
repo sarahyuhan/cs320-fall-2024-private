@@ -404,13 +404,13 @@ let rec eval_expr (env: dyn_env) (e: expr) : value =
       | _ -> failwith "Runtime error: length expects a list")
 
   | App (e1, e2) ->
-      let v1 = eval_expr env e1 in
-      let v2 = eval_expr env e2 in
-      (match v1 with
-       | VClos {arg; body; env=clos_env; _} ->
-         let env' = Env.add arg v2 clos_env in
-         eval_expr env' body
-       | _ -> failwith "application to non-function")
+    let v1 = eval_expr env e1 in
+    let v2 = eval_expr env e2 in
+    (match v1 with
+      | VClos {arg; body; env=clos_env; _} ->
+        let env' = Env.add arg v2 clos_env in
+        eval_expr env' body
+      | _ -> failwith "application to non-function")    
   | Let {is_rec; name; value; body} ->
     if not is_rec then
       (* Non-recursive let: just bind the value after evaluation *)
@@ -473,19 +473,27 @@ let type_check =
       | None -> None
   in fun prog -> go base_env prog
 
-let rec_env_for_length = Env.empty
 let length_body =
   Fun ("xs", None,
-       ListMatch {
-         matched = Var "xs";
-         hd_name = "h"; tl_name = "t";
-         cons_case = Bop (Add, Int 1, App (Var "length", Var "t"));
-         nil_case = Int 0;
-       }
-  )
+        ListMatch {
+          matched = Var "xs";
+          hd_name = "h"; tl_name = "t";
+          cons_case = Bop (Add, Int 1, App (Var "length", Var "t"));
+          nil_case = Int 0;
+        }
+)
 let base_runtime_env =
-  Env.empty
-  |> Env.add "length" (VClos {name=None; arg="xs"; body=length_body; env=rec_env_for_length})
+  let rec_env_for_length = Env.empty in
+  let length_clos = VClos {
+    name = Some "length";
+    arg = "xs";
+    body = length_body;
+    env = rec_env_for_length (* Pass the environment directly *)
+  } in
+  let rec_env_for_length = Env.add "length" length_clos rec_env_for_length in
+  rec_env_for_length
+
+
 let eval p =
   let rec nest = function
     | [] -> Unit
