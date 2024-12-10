@@ -395,14 +395,20 @@ let rec eval_expr (env: dyn_env) (e: expr) : value =
      | _ -> failwith "if condition not a boolean")
   | Fun (x,_,body) ->
     VClos {name=None;arg=x;body;env}
-  | App (e1,e2) ->
-    let v1 = eval_expr env e1 in
+  | App (Var "length", e2) ->
     let v2 = eval_expr env e2 in
-    (match v1 with
-      | VClos {name=_name;arg;body;env=clos_env} ->
-        let env' = Env.add arg v2 clos_env in
-        eval_expr env' body
-      | _ -> failwith "application to non-function")
+    (match v2 with
+      | VList l -> VInt (List.length l)
+      | _ -> failwith "Runtime error: length expects a list")
+
+  | App (e1, e2) ->
+      let v1 = eval_expr env e1 in
+      let v2 = eval_expr env e2 in
+      (match v1 with
+       | VClos {arg; body; env=clos_env; _} ->
+         let env' = Env.add arg v2 clos_env in
+         eval_expr env' body
+       | _ -> failwith "application to non-function")
   | Let {is_rec; name; value; body} ->
   let v_val = eval_expr env value in
   if not is_rec then
@@ -446,27 +452,45 @@ let rec eval_expr (env: dyn_env) (e: expr) : value =
        eval_expr env' case
      | _ -> failwith "pair match on non-pair")
 
+let base_env =
+  let alpha = TVar (gensym()) in
+  Env.empty
+  |> Env.add "length" (Forall([], TFun(TList alpha, TInt)))
+    
 let type_check =
   let rec go ctxt = function
-  | [] -> Some (Forall ([], TUnit))
-  | {is_rec;name;value} :: ls ->
-    match type_of ctxt (Let {is_rec;name;value; body = Var name}) with
-    | Some ty -> (
-      match ls with
-      | [] -> Some ty
-      | _ ->
-        let ctxt = Env.add name ty ctxt in
-        go ctxt ls
-    )
-    | None -> None
-  in go Env.empty
+    | [] -> Some (Forall ([], TUnit))
+    | {is_rec;name;value} :: ls ->
+      match type_of ctxt (Let {is_rec;name;value; body = Var name}) with
+      | Some ty ->
+        (match ls with
+        | [] -> Some ty
+        | _ ->
+          let ctxt = Env.add name ty ctxt in
+          go ctxt ls)
+      | None -> None
+  in fun prog -> go base_env prog
 
+let rec_env_for_length = Env.empty
+let length_body =
+  Fun ("xs", None,
+       ListMatch {
+         matched = Var "xs";
+         hd_name = "h"; tl_name = "t";
+         cons_case = Bop (Add, Int 1, App (Var "length", Var "t"));
+         nil_case = Int 0;
+       }
+  )
+let base_runtime_env =
+  Env.empty
+  |> Env.add "length" (VClos {name=None; arg="xs"; body=length_body; env=rec_env_for_length})
 let eval p =
   let rec nest = function
     | [] -> Unit
     | [{is_rec;name;value}] -> Let {is_rec;name;value;body = Var name}
     | {is_rec;name;value} :: ls -> Let {is_rec;name;value;body = nest ls}
-  in eval_expr Env.empty (nest p)
+  in eval_expr base_runtime_env (nest p)
+
 
 let interp input =
   match parse input with
@@ -476,3 +500,4 @@ let interp input =
     | None -> Error TypeError
   )
   | None -> Error ParseError
+
