@@ -164,20 +164,6 @@ expr:
     { OptMatch {matched;some_name;some_case;none_case} }
   | e = expr2 { e }
 
-  
-  | "let" r = "rec"? name = VAR args = arg* "=" value = expr "in" body = expr
-  {
-    let () = 
-      print_endline ("Debug: Parsing let " ^ (if Option.is_some r then "rec " else "") ^ name) 
-    in
-    Let {
-      is_rec = Option.is_some r;
-      name;
-      value = mk_func None args value;
-      body
-    }
-  }
-
 
 %inline bop:
   | "+" { Add }

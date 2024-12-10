@@ -263,7 +263,8 @@ let type_of (ctx: stc_env) (e: expr) : ty_scheme option =
   let cs = st'.constraints in
   match unify t cs with
   | None -> None
-  | Some scheme -> Some scheme
+  | Some (Forall(_, t')) ->
+    Some (generalize ctx t')
 
 
 exception AssertFail
@@ -410,24 +411,24 @@ let rec eval_expr (env: dyn_env) (e: expr) : value =
          eval_expr env' body
        | _ -> failwith "application to non-function")
   | Let {is_rec; name; value; body} ->
-  let v_val = eval_expr env value in
-  if not is_rec then
-    (* Non-recursive let: just bind the value and continue *)
-    let env' = Env.add name v_val env in
-    eval_expr env' body
-  else
-    (* Recursive let: If it's a closure, update its name. Otherwise, just bind the value. *)
-    let v_val =
-      match v_val with
-      | VClos c ->
-          VClos { c with name = Some name }
-      | _ ->
-          (* Here we allow non-function recursive bindings. 
-              This is unusual but will not raise an exception. *)
-          v_val
+    if not is_rec then
+      (* Non-recursive let: just bind the value after evaluation *)
+      let v_val = eval_expr env value in
+      let env' = Env.add name v_val env in
+      eval_expr env' body
+    else (
+      let placeholder = VClos { name = Some name; arg = "__placeholder"; body = Unit; env = env } in
+      let env' = Env.add name placeholder env in
+      let v_val = eval_expr env' value in
+      (* If value turns out to be a closure, set its name and environment properly. *)
+      let v_val =
+        match v_val with
+        | VClos c -> VClos { c with name = Some name; env = env' }
+        | _ -> v_val
     in
-    let env' = Env.add name v_val env in
-    eval_expr env' body
+    let env'' = Env.add name v_val env' in
+    eval_expr env'' body
+  )      
   | ListMatch {matched;hd_name;tl_name;cons_case;nil_case} ->
     let vm = eval_expr env matched in
     (match vm with
