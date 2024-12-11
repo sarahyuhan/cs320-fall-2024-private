@@ -69,7 +69,7 @@ let unify (target_ty : ty) (constraints : constr list) : ty_scheme option =
       Some (Forall (VarSet.to_list vars, final_type))
 
 
-let determine_type context expression =
+let type_of context expression =
   let generate_fresh_type () = TVar (gensym ()) in
 
   let rec gather_constraints context expression =
