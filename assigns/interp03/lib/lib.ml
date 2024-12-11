@@ -32,7 +32,7 @@ let apply_substitution_to_constraints subst constraints =
     (apply_substitution subst t1, apply_substitution subst t2)
   ) constraints
 
-let unify_types (target_ty : ty) (constraints : constr list) : ty_scheme option =
+let unify (target_ty : ty) (constraints : constr list) : ty_scheme option =
   let rec resolve_constraints constraints =
     match constraints with
     | [] -> Some []
