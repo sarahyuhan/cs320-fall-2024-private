@@ -97,11 +97,10 @@ let unify (ty: ty) (cs: constr list) : ty_scheme option =
   match unify_pairs cs with
   | None -> None
   | Some s ->
-    let t' = apply_subst_ty s ty in
-    (* Generalize with empty env here: in practice, type_of will handle context. *)
-    let free_vars = ftv_ty t' in
-    let scheme = Forall (free_vars, t') in
-    Some scheme
+      let t' = apply_subst_ty s ty in
+      (* Use the context's environment for generalization *)
+      let scheme = generalize Env.empty t' in
+      Some scheme
 
 (** Instantiate a type scheme with fresh type variables *)
 let instantiate (Forall (vars, t)) =
@@ -262,15 +261,13 @@ let type_of (ctx: stc_env) (e: expr) : ty_scheme option =
   try
     let (t, st') = infer_expr {env=ctx; constraints=[]} e in
     let cs = st'.constraints in
-    
     match unify t cs with
     | None -> None
-    | Some (Forall (_, t')) ->
-        Some (generalize ctx t')
-  with 
-  | Failure msg -> 
-    print_endline ("Type inference failed: " ^ msg);
-    None    
+    | Some scheme -> Some scheme
+  with
+    | Failure msg ->
+      print_endline ("Type inference failed: " ^ msg);
+      None   
 
   
 
