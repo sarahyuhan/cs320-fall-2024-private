@@ -72,7 +72,7 @@ let unify (target_ty : ty) (constraints : constr list) : ty_scheme option =
 let type_of (ctxt : stc_env) (e : expr) : ty_scheme option =
   let fresh () = TVar (gensym ()) in
   
-  let rec generate_constraints e =
+  let rec generate_constraints ctxt e =
     match e with
     | Unit -> (TUnit, [])
     | True | False -> (TBool, [])
@@ -94,21 +94,21 @@ let type_of (ctxt : stc_env) (e : expr) : ty_scheme option =
     | Fun (x, annot, body) ->
         let arg_ty = match annot with Some t -> t | None -> fresh () in
         let ctxt' = Env.add x (Forall ([], arg_ty)) ctxt in
-        let (body_ty, constraints) = generate_constraints body in
+        let (body_ty, constraints) = generate_constraints ctxt' body in
         (TFun (arg_ty, body_ty), constraints)
     | App (e1, e2) ->
-        let (t1, c1) = generate_constraints e1 in
-        let (t2, c2) = generate_constraints e2 in
+        let (t1, c1) = generate_constraints ctxt e1 in
+        let (t2, c2) = generate_constraints ctxt e2 in
         let ret_ty = fresh () in
         (ret_ty, (t1, TFun (t2, ret_ty)) :: c1 @ c2)
     | ENone -> (TOption (fresh ()), [])
     | ESome e1 ->
-        let (t, constraints) = generate_constraints e1 in
+        let (t, constraints) = generate_constraints ctxt e1 in
         (TOption t, constraints)
     | Nil -> (TList (fresh ()), [])
     | Bop (op, e1, e2) ->
-        let (t1, c1) = generate_constraints e1 in
-        let (t2, c2) = generate_constraints e2 in
+        let (t1, c1) = generate_constraints ctxt e1 in
+        let (t2, c2) = generate_constraints ctxt e2 in
         (match op with
           | Add | Sub | Mul | Div | Mod -> (TInt, (t1, TInt) :: (t2, TInt) :: c1 @ c2)
           | AddF | SubF | MulF | DivF | PowF -> (TFloat, (t1, TFloat) :: (t2, TFloat) :: c1 @ c2)
@@ -123,64 +123,62 @@ let type_of (ctxt : stc_env) (e : expr) : ty_scheme option =
               (list_ty, (t1, list_ty) :: (t2, list_ty) :: c1 @ c2)
           | Comma -> (TPair (t1, t2), c1 @ c2))
     | If (e1, e2, e3) ->
-        let (t1, c1) = generate_constraints e1 in
-        let (t2, c2) = generate_constraints e2 in
-        let (t3, c3) = generate_constraints e3 in
+        let (t1, c1) = generate_constraints ctxt e1 in
+        let (t2, c2) = generate_constraints ctxt e2 in
+        let (t3, c3) = generate_constraints ctxt e3 in
         (t2, (t1, TBool) :: (t2, t3) :: c1 @ c2 @ c3)
     | Assert e1 -> (
-        match e1 with
-        | False -> (fresh (), [])
-        | _ ->
-            let (t, constraints) = generate_constraints e1 in
-            (TUnit, (t, TBool) :: constraints))
+        let (t, constraints) = generate_constraints ctxt e1 in
+        (TUnit, (t, TBool) :: constraints))
     | ListMatch { matched; hd_name; tl_name; cons_case; nil_case } ->
-        let (tm, cm) = generate_constraints matched in
-        let (tn, cn) = generate_constraints nil_case in
+        let (tm, cm) = generate_constraints ctxt matched in
+        let (tn, cn) = generate_constraints ctxt nil_case in
         let alpha = fresh () in
         let ctxt' =
           Env.add tl_name (Forall ([], TList alpha))
           @@ Env.add hd_name (Forall ([], alpha)) ctxt
         in
-        let (tc, cc) = generate_constraints cons_case in
+        let (tc, cc) = generate_constraints ctxt' cons_case in
         (tc, (tm, TList alpha) :: (tn, tc) :: cm @ cn @ cc)
     | OptMatch { matched; some_name; some_case; none_case } ->
-        let (tm, cm) = generate_constraints matched in
+        let (tm, cm) = generate_constraints ctxt matched in
         let alpha = fresh () in
-        let (tn, cn) = generate_constraints none_case in
+        let (tn, cn) = generate_constraints ctxt none_case in
         let ctxt' = Env.add some_name (Forall ([], alpha)) ctxt in
-        let (ts, cs) = generate_constraints some_case in
+        let (ts, cs) = generate_constraints ctxt' some_case in
         (ts, (tm, TOption alpha) :: (tn, ts) :: cm @ cn @ cs)
     | PairMatch { matched; fst_name; snd_name; case } ->
-        let (tm, cm) = generate_constraints matched in
+        let (tm, cm) = generate_constraints ctxt matched in
         let alpha = fresh () in
         let beta = fresh () in
         let ctxt' =
           Env.add snd_name (Forall ([], beta))
           @@ Env.add fst_name (Forall ([], alpha)) ctxt
         in
-        let (tc, cc) = generate_constraints case in
+        let (tc, cc) = generate_constraints ctxt' case in
         (tc, (tm, TPair (alpha, beta)) :: cm @ cc)
     | Let { is_rec = false; name; value; body } ->
-        let (t1, c1) = generate_constraints value in
+        let (t1, c1) = generate_constraints ctxt value in
         let ctxt' = Env.add name (Forall ([], t1)) ctxt in
-        let (t2, c2) = generate_constraints body in
+        let (t2, c2) = generate_constraints ctxt' body in
         (t2, c1 @ c2)
     | Let { is_rec = true; name; value; body } ->
         let alpha = fresh () in
         let beta = fresh () in
         let fn_ty = TFun (alpha, beta) in
         let ctxt' = Env.add name (Forall ([], fn_ty)) ctxt in
-        let (t1, c1) = generate_constraints value in
+        let (t1, c1) = generate_constraints ctxt' value in
         let ctxt'' = Env.add name (Forall ([], t1)) ctxt in
-        let (t2, c2) = generate_constraints body in
+        let (t2, c2) = generate_constraints ctxt'' body in
         (t2, (t1, fn_ty) :: c1 @ c2)
     | Annot (e, t) ->
-        let (te, ce) = generate_constraints e in
+        let (te, ce) = generate_constraints ctxt e in
         (te, (te, t) :: ce)
   in
 
-  let (ty, constraints) = generate_constraints e in
-  unify ty constraints      
+  let (ty, constraints) = generate_constraints ctxt e in
+  unify ty constraints
+  
 
 
 exception AssertFail
