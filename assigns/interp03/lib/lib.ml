@@ -69,148 +69,118 @@ let unify (target_ty : ty) (constraints : constr list) : ty_scheme option =
       Some (Forall (VarSet.to_list vars, final_type))
 
 
-let type_of context expression =
-  let generate_fresh_type () = TVar (gensym ()) in
-
-  let rec gather_constraints context expression =
-    match expression with
+let type_of (ctxt : stc_env) (e : expr) : ty_scheme option =
+  let fresh () = TVar (gensym ()) in
+  
+  let rec generate_constraints e =
+    match e with
     | Unit -> (TUnit, [])
     | True | False -> (TBool, [])
     | Int _ -> (TInt, [])
     | Float _ -> (TFloat, [])
-    | Nil -> 
-        let fresh_type = generate_fresh_type () in
-        (TList fresh_type, [])
-    | ENone -> 
-        let fresh_type = generate_fresh_type () in
-        (TOption fresh_type, [])
-    | Var variable -> (
-        match Env.find_opt variable context with
-        | Some (Forall (variables, typ)) ->
-            let substitution = List.fold_left 
-              (fun acc var -> Env.add var (generate_fresh_type ()) acc) 
-              Env.empty 
-              variables
+    | Var x -> (
+        match Env.find_opt x ctxt with
+        | Some (Forall (bnd_vars, t)) ->
+            let rec instantiate t vars =
+              match vars with
+              | [] -> t
+              | v :: vs ->
+                  let fresh_t = fresh () in
+                  instantiate (ty_subst fresh_t v t) vs
             in
-            let rec substitute typ = 
-              match typ with 
-              | TVar v -> (match Env.find_opt v substitution with 
-                          | Some t -> substitute t 
-                          | None -> typ)
-              | TList t -> TList (substitute t)
-              | TOption t -> TOption (substitute t)
-              | TPair (t1, t2) -> TPair (substitute t1, substitute t2)
-              | TFun (t1, t2) -> TFun (substitute t1, substitute t2)
-              | _ -> typ
-            in
-            (substitute typ, [])
-        | None -> failwith ("Undefined variable: " ^ variable)
+            (instantiate t bnd_vars, [])
+        | None -> (fresh (), [])
       )
-    | ESome sub_expr ->
-        let (sub_expr_type, constraints) = gather_constraints context sub_expr in
-        (TOption sub_expr_type, constraints)
-    | Annot (sub_expr, annotation_type) ->
-        let (inferred_type, constraints) = gather_constraints context sub_expr in
-        (annotation_type, (inferred_type, annotation_type) :: constraints)
-    | PairMatch { matched; fst_name; snd_name; case } ->
-        let (matched_type, constraints1) = gather_constraints context matched in
-        let type1 = generate_fresh_type () in
-        let type2 = generate_fresh_type () in
-        let updated_context = 
-          Env.add fst_name (Forall ([], type1)) 
-          @@ Env.add snd_name (Forall ([], type2)) context
-        in
-        let (case_type, constraints2) = gather_constraints updated_context case in
-        (case_type, constraints1 @ constraints2 @ 
-                  [(matched_type, TPair (type1, type2))])
+    | Fun (x, annot, body) ->
+        let arg_ty = match annot with Some t -> t | None -> fresh () in
+        let ctxt' = Env.add x (Forall ([], arg_ty)) ctxt in
+        let (body_ty, constraints) = generate_constraints body in
+        (TFun (arg_ty, body_ty), constraints)
+    | App (e1, e2) ->
+        let (t1, c1) = generate_constraints e1 in
+        let (t2, c2) = generate_constraints e2 in
+        let ret_ty = fresh () in
+        (ret_ty, (t1, TFun (t2, ret_ty)) :: c1 @ c2)
+    | ENone -> (TOption (fresh ()), [])
+    | ESome e1 ->
+        let (t, constraints) = generate_constraints e1 in
+        (TOption t, constraints)
+    | Nil -> (TList (fresh ()), [])
+    | Bop (op, e1, e2) ->
+        let (t1, c1) = generate_constraints e1 in
+        let (t2, c2) = generate_constraints e2 in
+        (match op with
+          | Add | Sub | Mul | Div | Mod -> (TInt, (t1, TInt) :: (t2, TInt) :: c1 @ c2)
+          | AddF | SubF | MulF | DivF | PowF -> (TFloat, (t1, TFloat) :: (t2, TFloat) :: c1 @ c2)
+          | Lt | Lte | Gt | Gte | Eq | Neq -> (TBool, (t1, t2) :: c1 @ c2)
+          | And | Or -> (TBool, (t1, TBool) :: (t2, TBool) :: c1 @ c2)
+          | Cons ->
+              let list_ty = TList t1 in
+              (list_ty, (t2, list_ty) :: c1 @ c2)
+          | Concat ->
+              let elem_ty = fresh () in
+              let list_ty = TList elem_ty in
+              (list_ty, (t1, list_ty) :: (t2, list_ty) :: c1 @ c2)
+          | Comma -> (TPair (t1, t2), c1 @ c2))
+    | If (e1, e2, e3) ->
+        let (t1, c1) = generate_constraints e1 in
+        let (t2, c2) = generate_constraints e2 in
+        let (t3, c3) = generate_constraints e3 in
+        (t2, (t1, TBool) :: (t2, t3) :: c1 @ c2 @ c3)
+    | Assert e1 -> (
+        match e1 with
+        | False -> (fresh (), [])
+        | _ ->
+            let (t, constraints) = generate_constraints e1 in
+            (TUnit, (t, TBool) :: constraints))
     | ListMatch { matched; hd_name; tl_name; cons_case; nil_case } ->
-        let (matched_type, constraints1) = gather_constraints context matched in
-        let list_element_type = generate_fresh_type () in
-        let updated_context = 
-          Env.add hd_name (Forall ([], list_element_type)) 
-          @@ Env.add tl_name (Forall ([], TList list_element_type)) context
+        let (tm, cm) = generate_constraints matched in
+        let (tn, cn) = generate_constraints nil_case in
+        let alpha = fresh () in
+        let ctxt' =
+          Env.add tl_name (Forall ([], TList alpha))
+          @@ Env.add hd_name (Forall ([], alpha)) ctxt
         in
-        let (cons_case_type, constraints2) = gather_constraints updated_context cons_case in
-        let (nil_case_type, constraints3) = gather_constraints context nil_case in
-        (nil_case_type, constraints1 @ constraints2 @ constraints3 @ 
-                        [(matched_type, TList list_element_type); 
-                          (cons_case_type, nil_case_type)])
+        let (tc, cc) = generate_constraints cons_case in
+        (tc, (tm, TList alpha) :: (tn, tc) :: cm @ cn @ cc)
     | OptMatch { matched; some_name; some_case; none_case } ->
-        let (matched_type, constraints1) = gather_constraints context matched in
-        let option_element_type = generate_fresh_type () in
-        let updated_context = Env.add some_name (Forall ([], option_element_type)) context in
-        let (some_case_type, constraints2) = gather_constraints updated_context some_case in
-        let (none_case_type, constraints3) = gather_constraints context none_case in
-        (none_case_type, constraints1 @ constraints2 @ constraints3 @ 
-                        [(matched_type, TOption option_element_type); 
-                          (some_case_type, none_case_type)])
-    | Bop (operator, expr1, expr2) ->
-        let (type1, constraints1) = gather_constraints context expr1 in
-        let (type2, constraints2) = gather_constraints context expr2 in
-        (match operator with
-        | Add | Sub | Mul | Div | Mod ->
-            (TInt, constraints1 @ constraints2 @ [(type1, TInt); (type2, TInt)])
-        | AddF | SubF | MulF | DivF | PowF ->
-            (TFloat, constraints1 @ constraints2 @ [(type1, TFloat); (type2, TFloat)])
-        | Lt | Lte | Gt | Gte | Eq | Neq ->
-            (TBool, constraints1 @ constraints2 @ [(type1, type2)])
-        | And | Or ->
-            (TBool, constraints1 @ constraints2 @ [(type1, TBool); (type2, TBool)])
-        | Cons ->
-            let element_type = generate_fresh_type () in
-            (TList element_type, constraints1 @ constraints2 @ 
-                                [(type2, TList element_type); 
-                                  (type1, element_type)])
-        | Concat ->
-            let element_type = generate_fresh_type () in
-            (TList element_type, constraints1 @ constraints2 @ 
-                                [(type1, TList element_type); 
-                                  (type2, TList element_type)])
-        | Comma ->
-            (TPair (type1, type2), constraints1 @ constraints2)
-        )
-    | Fun (arg_name, opt_type, body) ->
-        let arg_type = match opt_type with 
-          | Some t -> t 
-          | None -> generate_fresh_type () 
+        let (tm, cm) = generate_constraints matched in
+        let alpha = fresh () in
+        let (tn, cn) = generate_constraints none_case in
+        let ctxt' = Env.add some_name (Forall ([], alpha)) ctxt in
+        let (ts, cs) = generate_constraints some_case in
+        (ts, (tm, TOption alpha) :: (tn, ts) :: cm @ cn @ cs)
+    | PairMatch { matched; fst_name; snd_name; case } ->
+        let (tm, cm) = generate_constraints matched in
+        let alpha = fresh () in
+        let beta = fresh () in
+        let ctxt' =
+          Env.add snd_name (Forall ([], beta))
+          @@ Env.add fst_name (Forall ([], alpha)) ctxt
         in
-        let updated_context = Env.add arg_name (Forall ([], arg_type)) context in
-        let (body_type, body_constraints) = gather_constraints updated_context body in
-        (TFun (arg_type, body_type), body_constraints)
-    | App (func_expr, arg_expr) ->
-        let (func_type, constraints1) = gather_constraints context func_expr in
-        let (arg_type, constraints2) = gather_constraints context arg_expr in
-        let result_type = generate_fresh_type () in
-        (result_type, constraints1 @ constraints2 @ [(func_type, TFun (arg_type, result_type))])
-    | If (condition, then_expr, else_expr) ->
-        let (condition_type, constraints1) = gather_constraints context condition in
-        let (then_type, constraints2) = gather_constraints context then_expr in
-        let (else_type, constraints3) = gather_constraints context else_expr in
-        (then_type, constraints1 @ constraints2 @ constraints3 @ 
-                    [(condition_type, TBool); (then_type, else_type)])
-    | Assert assert_expr ->
-        let (assert_type, constraints) = gather_constraints context assert_expr in
-        (TUnit, constraints @ [(assert_type, TBool)])
-    | Let { is_rec; name; value; body } -> 
-        let (value_type, value_constraints) = 
-          if is_rec then 
-            let alpha = generate_fresh_type () in
-            let beta = generate_fresh_type () in
-            let updated_context = Env.add name (Forall ([], TFun (alpha, beta))) context in
-            let (val_type, constraints) = gather_constraints updated_context value in
-            (val_type, constraints @ [(val_type, TFun (alpha, beta))])
-          else 
-            gather_constraints context value 
-        in
-        let updated_context = Env.add name (Forall ([], value_type)) context in
-        let (body_type, body_constraints) = gather_constraints updated_context body in
-        (body_type, value_constraints @ body_constraints)
+        let (tc, cc) = generate_constraints case in
+        (tc, (tm, TPair (alpha, beta)) :: cm @ cc)
+    | Let { is_rec = false; name; value; body } ->
+        let (t1, c1) = generate_constraints value in
+        let ctxt' = Env.add name (Forall ([], t1)) ctxt in
+        let (t2, c2) = generate_constraints body in
+        (t2, c1 @ c2)
+    | Let { is_rec = true; name; value; body } ->
+        let alpha = fresh () in
+        let beta = fresh () in
+        let fn_ty = TFun (alpha, beta) in
+        let ctxt' = Env.add name (Forall ([], fn_ty)) ctxt in
+        let (t1, c1) = generate_constraints value in
+        let ctxt'' = Env.add name (Forall ([], t1)) ctxt in
+        let (t2, c2) = generate_constraints body in
+        (t2, (t1, fn_ty) :: c1 @ c2)
+    | Annot (e, t) ->
+        let (te, ce) = generate_constraints e in
+        (te, (te, t) :: ce)
   in
-  try 
-    let (final_type, all_constraints) = gather_constraints context expression in
-    unify final_type all_constraints
-  with 
-  | _ -> failwith "Type inference error"      
+
+  let (ty, constraints) = generate_constraints e in
+  unify ty constraints      
 
 
 exception AssertFail
