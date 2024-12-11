@@ -1,129 +1,217 @@
 open Utils
 include My_parser
 
-let rec assoc_opt x = function
-  | [] -> None
-  | (y, v) :: rest -> if x = y then Some v else assoc_opt x rest
+let parse s : prog option = My_parser.parse s
 
-let rec list_exists f = function
-  | [] -> false
-  | x :: xs -> f x || list_exists f xs
+let rec free_vars = function 
+  | TUnit | TInt | TFloat | TBool -> VarSet.empty
+  | TVar x -> VarSet.of_list [x]
+  | TFun (t1, t2) -> VarSet.union (free_vars t1) (free_vars t2)
+  | TList t -> free_vars t
+  | TOption t -> free_vars t
+  | TPair (t1, t2) -> VarSet.union (free_vars t1) (free_vars t2)
 
-type substitution = (ident * ty) list
+let occurs_in x ty = VarSet.mem x (free_vars ty)
 
-let rec apply_subst_ty (subst : substitution) (ty : ty) : ty =
-  match ty with
-  | TUnit | TInt | TFloat | TBool -> ty
-  | TVar var -> (match assoc_opt var subst with Some ty' -> ty' | None -> ty)
-  | TList t -> TList (apply_subst_ty subst t)
-  | TOption t -> TOption (apply_subst_ty subst t)
-  | TPair (t1, t2) -> TPair (apply_subst_ty subst t1, apply_subst_ty subst t2)
-  | TFun (arg_ty, ret_ty) -> TFun (apply_subst_ty subst arg_ty, apply_subst_ty subst ret_ty)
+let rec substitute_type ty var = function
+  | TUnit -> TUnit
+  | TInt -> TInt
+  | TFloat -> TFloat
+  | TBool -> TBool
+  | TVar y -> if y = var then ty else TVar y
+  | TFun (t1, t2) -> TFun (substitute_type ty var t1, substitute_type ty var t2)
+  | TList t -> TList (substitute_type ty var t)
+  | TOption t -> TOption (substitute_type ty var t)
+  | TPair (t1, t2) -> TPair (substitute_type ty var t1, substitute_type ty var t2)
 
-let compose_subst (subst1 : substitution) (subst2 : substitution) : substitution =
-  let updated_subst2 = List.map (fun (x, t) -> (x, apply_subst_ty subst1 t)) subst2 in
-  let merged = List.fold_left (fun acc (x, t) ->
-      if list_exists (fun (y, _) -> x = y) acc then acc else (x, t) :: acc
-    ) updated_subst2 subst1
+let apply_substitution subst ty =
+  List.fold_left (fun ty' (var, u) -> substitute_type u var ty') ty subst
+
+let apply_substitution_to_constraints subst constraints =
+  List.map (fun (t1, t2) ->
+    (apply_substitution subst t1, apply_substitution subst t2)
+  ) constraints
+
+let unify_types (target_ty : ty) (constraints : constr list) : ty_scheme option =
+  let rec resolve_constraints constraints =
+    match constraints with
+    | [] -> Some []
+    | (t1, t2) :: rest when t1 = t2 -> resolve_constraints rest
+    | (TFun (a1, a2), TFun (b1, b2)) :: rest ->
+      resolve_constraints ((a1, b1) :: (a2, b2) :: rest)
+    | (TPair (a1, a2), TPair (b1, b2)) :: rest ->
+      resolve_constraints ((a1, b1) :: (a2, b2) :: rest)
+    | (TList a, TList b) :: rest ->
+      resolve_constraints ((a, b) :: rest)
+    | (TOption a, TOption b) :: rest ->
+      resolve_constraints ((a, b) :: rest)
+    | (TVar x, t) :: rest ->
+      if occurs_in x t then None
+      else
+        let updated_constraints = apply_substitution_to_constraints [(x, t)] rest in
+        (match resolve_constraints updated_constraints with
+         | None -> None
+         | Some solution -> Some ((x, t) :: solution))
+    | (t, TVar x) :: rest ->
+      if occurs_in x t then None
+      else
+        let updated_constraints = apply_substitution_to_constraints [(x, t)] rest in
+        (match resolve_constraints updated_constraints with
+         | None -> None
+         | Some solution -> Some ((x, t) :: solution))
+    | _ -> None
   in
-  merged
-
-let rec freetype = function
-  | TUnit | TInt | TFloat | TBool -> []
-  | TVar x -> [x]
-  | TList t | TOption t -> freetype t
-  | TPair (t1, t2) | TFun (t1, t2) -> freetype t1 @ freetype t2
-
-let ftv_scheme (Forall (vars, ty)) =
-  List.filter (fun v -> not (List.mem v vars)) (freetype ty)
-
-let ftv_env (env : stc_env) =
-  List.fold_left (fun acc (_, scheme) -> acc @ ftv_scheme scheme) [] (Env.to_list env)
-
-let generalize (env : stc_env) (ty : ty) : ty_scheme =
-  let env_free_vars = ftv_env env in
-  let ty_free_vars = freetype ty in
-  let generalized_vars = List.filter (fun v -> not (List.mem v env_free_vars)) ty_free_vars in
-  Forall (generalized_vars, ty)
-
-let rec ty_subst (replacement : ty) (var : ident) (ty : ty) : ty =
-  match ty with
-  | TUnit | TInt | TFloat | TBool -> ty
-  | TVar x -> if x = var then replacement else TVar x
-  | TList t -> TList (ty_subst replacement var t)
-  | TOption t -> TOption (ty_subst replacement var t)
-  | TPair (t1, t2) -> TPair (ty_subst replacement var t1, ty_subst replacement var t2)
-  | TFun (t1, t2) -> TFun (ty_subst replacement var t1, ty_subst replacement var t2)
-
-let instantiate (Forall (vars, ty)) =
-  let subst = List.map (fun var -> (var, TVar (gensym ()))) vars in
-  apply_subst_ty subst ty
-
-let rec unify_constraints = function
-  | [] -> Some []
-  | (t1, t2) :: rest when t1 = t2 -> unify_constraints rest
-  | (TVar x, ty) :: rest | (ty, TVar x) :: rest ->
-      if List.mem x (freetype ty) then None
-      else
-        let rest' = List.map (fun (t1, t2) -> (ty_subst ty x t1, ty_subst ty x t2)) rest in
-        Option.map (fun sol -> (x, ty) :: sol) (unify_constraints rest')
-  | (TFun (t1, t2), TFun (t3, t4)) :: rest ->
-      unify_constraints ((t1, t3) :: (t2, t4) :: rest)
-  | (TPair (t1, t2), TPair (t3, t4)) :: rest ->
-      unify_constraints ((t1, t3) :: (t2, t4) :: rest)
-  | (TList t1, TList t2) :: rest -> unify_constraints ((t1, t2) :: rest)
-  | (TOption t1, TOption t2) :: rest -> unify_constraints ((t1, t2) :: rest)
-  | _ -> None
-
-let unify (initial_ty : ty) (constraints : constr list) : ty_scheme option =
-  match unify_constraints constraints with
+  match resolve_constraints constraints with
   | None -> None
-  | Some subst ->
-      let unified_ty = apply_subst_ty subst initial_ty in
-      let free_vars = freetype unified_ty in
-      Some (Forall (free_vars, unified_ty))
+  | Some solution ->
+      let final_type = apply_substitution solution target_ty in
+      let vars = free_vars final_type in
+      Some (Forall (VarSet.to_list vars, final_type))
 
-let rec infer_expr (env : stc_env) (e : expr) : ty * constr list =
-  let fresh_ty () = TVar (gensym ()) in
-  match e with
-  | Unit -> (TUnit, [])
-  | True | False -> (TBool, [])
-  | Int _ -> (TInt, [])
-  | Float _ -> (TFloat, [])
-  | Var x -> (
-      match Env.find_opt x env with
-      | Some scheme -> (instantiate scheme, [])
-      | None -> failwith ("Unbound variable: " ^ x)
-    )
-  | Fun (arg, ann, body) ->
-      let arg_ty = match ann with Some t -> t | None -> fresh_ty () in
-      let env' = Env.add arg (Forall ([], arg_ty)) env in
-      let body_ty, body_constraints = infer_expr env' body in
-      (TFun (arg_ty, body_ty), body_constraints)
-  | App (e1, e2) ->
-      let t1, c1 = infer_expr env e1 in
-      let t2, c2 = infer_expr env e2 in
-      let ret_ty = fresh_ty () in
-      (ret_ty, (t1, TFun (t2, ret_ty)) :: c1 @ c2)
-  | Let { is_rec; name; value; body } ->
-      if not is_rec then
-        let value_ty, value_constraints = infer_expr env value in
-        let env' = Env.add name (Forall ([], value_ty)) env in
-        let body_ty, body_constraints = infer_expr env' body in
-        (body_ty, value_constraints @ body_constraints)
-      else
-        let fn_ty = fresh_ty () in
-        let env' = Env.add name (Forall ([], fn_ty)) env in
-        let value_ty, value_constraints = infer_expr env' value in
-        let body_ty, body_constraints = infer_expr env' body in
-        (body_ty, (fn_ty, value_ty) :: value_constraints @ body_constraints)
-  | _ -> failwith "Expression not implemented yet"
 
-let type_of (env : stc_env) (e : expr) : ty_scheme option =
-  let ty, constraints = infer_expr env e in
-  unify ty constraints
+let determine_type context expression =
+  let generate_fresh_type () = TVar (gensym ()) in
 
-  
+  let rec gather_constraints context expression =
+    match expression with
+    | Unit -> (TUnit, [])
+    | True | False -> (TBool, [])
+    | Int _ -> (TInt, [])
+    | Float _ -> (TFloat, [])
+    | Nil -> 
+        let fresh_type = generate_fresh_type () in
+        (TList fresh_type, [])
+    | ENone -> 
+        let fresh_type = generate_fresh_type () in
+        (TOption fresh_type, [])
+    | Var variable -> (
+        match Env.find_opt variable context with
+        | Some (Forall (variables, typ)) ->
+            let substitution = List.fold_left 
+              (fun acc var -> Env.add var (generate_fresh_type ()) acc) 
+              Env.empty 
+              variables
+            in
+            let rec substitute typ = 
+              match typ with 
+              | TVar v -> (match Env.find_opt v substitution with 
+                          | Some t -> substitute t 
+                          | None -> typ)
+              | TList t -> TList (substitute t)
+              | TOption t -> TOption (substitute t)
+              | TPair (t1, t2) -> TPair (substitute t1, substitute t2)
+              | TFun (t1, t2) -> TFun (substitute t1, substitute t2)
+              | _ -> typ
+            in
+            (substitute typ, [])
+        | None -> failwith ("Undefined variable: " ^ variable)
+      )
+    | ESome sub_expr ->
+        let (sub_expr_type, constraints) = gather_constraints context sub_expr in
+        (TOption sub_expr_type, constraints)
+    | Annot (sub_expr, annotation_type) ->
+        let (inferred_type, constraints) = gather_constraints context sub_expr in
+        (annotation_type, (inferred_type, annotation_type) :: constraints)
+    | PairMatch { matched; fst_name; snd_name; case } ->
+        let (matched_type, constraints1) = gather_constraints context matched in
+        let type1 = generate_fresh_type () in
+        let type2 = generate_fresh_type () in
+        let updated_context = 
+          Env.add fst_name (Forall ([], type1)) 
+          @@ Env.add snd_name (Forall ([], type2)) context
+        in
+        let (case_type, constraints2) = gather_constraints updated_context case in
+        (case_type, constraints1 @ constraints2 @ 
+                  [(matched_type, TPair (type1, type2))])
+    | ListMatch { matched; hd_name; tl_name; cons_case; nil_case } ->
+        let (matched_type, constraints1) = gather_constraints context matched in
+        let list_element_type = generate_fresh_type () in
+        let updated_context = 
+          Env.add hd_name (Forall ([], list_element_type)) 
+          @@ Env.add tl_name (Forall ([], TList list_element_type)) context
+        in
+        let (cons_case_type, constraints2) = gather_constraints updated_context cons_case in
+        let (nil_case_type, constraints3) = gather_constraints context nil_case in
+        (nil_case_type, constraints1 @ constraints2 @ constraints3 @ 
+                        [(matched_type, TList list_element_type); 
+                          (cons_case_type, nil_case_type)])
+    | OptMatch { matched; some_name; some_case; none_case } ->
+        let (matched_type, constraints1) = gather_constraints context matched in
+        let option_element_type = generate_fresh_type () in
+        let updated_context = Env.add some_name (Forall ([], option_element_type)) context in
+        let (some_case_type, constraints2) = gather_constraints updated_context some_case in
+        let (none_case_type, constraints3) = gather_constraints context none_case in
+        (none_case_type, constraints1 @ constraints2 @ constraints3 @ 
+                        [(matched_type, TOption option_element_type); 
+                          (some_case_type, none_case_type)])
+    | Bop (operator, expr1, expr2) ->
+        let (type1, constraints1) = gather_constraints context expr1 in
+        let (type2, constraints2) = gather_constraints context expr2 in
+        (match operator with
+        | Add | Sub | Mul | Div | Mod ->
+            (TInt, constraints1 @ constraints2 @ [(type1, TInt); (type2, TInt)])
+        | AddF | SubF | MulF | DivF | PowF ->
+            (TFloat, constraints1 @ constraints2 @ [(type1, TFloat); (type2, TFloat)])
+        | Lt | Lte | Gt | Gte | Eq | Neq ->
+            (TBool, constraints1 @ constraints2 @ [(type1, type2)])
+        | And | Or ->
+            (TBool, constraints1 @ constraints2 @ [(type1, TBool); (type2, TBool)])
+        | Cons ->
+            let element_type = generate_fresh_type () in
+            (TList element_type, constraints1 @ constraints2 @ 
+                                [(type2, TList element_type); 
+                                  (type1, element_type)])
+        | Concat ->
+            let element_type = generate_fresh_type () in
+            (TList element_type, constraints1 @ constraints2 @ 
+                                [(type1, TList element_type); 
+                                  (type2, TList element_type)])
+        | Comma ->
+            (TPair (type1, type2), constraints1 @ constraints2)
+        )
+    | Fun (arg_name, opt_type, body) ->
+        let arg_type = match opt_type with 
+          | Some t -> t 
+          | None -> generate_fresh_type () 
+        in
+        let updated_context = Env.add arg_name (Forall ([], arg_type)) context in
+        let (body_type, body_constraints) = gather_constraints updated_context body in
+        (TFun (arg_type, body_type), body_constraints)
+    | App (func_expr, arg_expr) ->
+        let (func_type, constraints1) = gather_constraints context func_expr in
+        let (arg_type, constraints2) = gather_constraints context arg_expr in
+        let result_type = generate_fresh_type () in
+        (result_type, constraints1 @ constraints2 @ [(func_type, TFun (arg_type, result_type))])
+    | If (condition, then_expr, else_expr) ->
+        let (condition_type, constraints1) = gather_constraints context condition in
+        let (then_type, constraints2) = gather_constraints context then_expr in
+        let (else_type, constraints3) = gather_constraints context else_expr in
+        (then_type, constraints1 @ constraints2 @ constraints3 @ 
+                    [(condition_type, TBool); (then_type, else_type)])
+    | Assert assert_expr ->
+        let (assert_type, constraints) = gather_constraints context assert_expr in
+        (TUnit, constraints @ [(assert_type, TBool)])
+    | Let { is_rec; name; value; body } -> 
+        let (value_type, value_constraints) = 
+          if is_rec then 
+            let alpha = generate_fresh_type () in
+            let beta = generate_fresh_type () in
+            let updated_context = Env.add name (Forall ([], TFun (alpha, beta))) context in
+            let (val_type, constraints) = gather_constraints updated_context value in
+            (val_type, constraints @ [(val_type, TFun (alpha, beta))])
+          else 
+            gather_constraints context value 
+        in
+        let updated_context = Env.add name (Forall ([], value_type)) context in
+        let (body_type, body_constraints) = gather_constraints updated_context body in
+        (body_type, value_constraints @ body_constraints)
+  in
+  try 
+    let (final_type, all_constraints) = gather_constraints context expression in
+    unify final_type all_constraints
+  with 
+  | _ -> failwith "Type inference error"      
+
 
 exception AssertFail
 exception DivByZero
