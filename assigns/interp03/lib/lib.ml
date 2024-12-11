@@ -259,13 +259,19 @@ let rec infer_expr (st: inference_state) (e: expr) : ty * inference_state =
     (t_case, {st_case with env=st.env})
 
 let type_of (ctx: stc_env) (e: expr) : ty_scheme option =
-  let (t, st') = infer_expr {env=ctx; constraints=[]} e in
-  let cs = st'.constraints in
-  
-  match unify t cs with
-  | None -> None
-  | Some (Forall (_, t')) ->
-    Some (generalize ctx t')
+  try
+    let (t, st') = infer_expr {env=ctx; constraints=[]} e in
+    let cs = st'.constraints in
+    
+    match unify t cs with
+    | None -> None
+    | Some (Forall (_, t')) ->
+        Some (generalize ctx t')
+  with 
+  | Failure msg -> 
+    print_endline ("Type inference failed: " ^ msg);
+    None    
+
   
 
 exception AssertFail
@@ -407,10 +413,24 @@ let rec eval_expr (env: dyn_env) (e: expr) : value =
     let v1 = eval_expr env e1 in
     let v2 = eval_expr env e2 in
     (match v1 with
-      | VClos {arg; body; env=clos_env; _} ->
-        let env' = Env.add arg v2 clos_env in
-        eval_expr env' body
-      | _ -> failwith "application to non-function")    
+      | VClos {arg; body; env=clos_env; name=_} ->
+          let env' = Env.add arg v2 clos_env in
+          eval_expr env' body
+      | _ -> 
+          (* Additional handling for built-in functions *)
+          (match e1 with
+          | Var fname ->
+              (match Env.find_opt fname env with
+                | Some (VClos closure) -> 
+                    let env' = Env.add closure.arg v2 closure.env in
+                    eval_expr env' closure.body
+                | Some _ -> failwith ("Cannot apply non-function value: " ^ fname)
+                | None -> failwith ("Unbound function: " ^ fname))
+          | _ -> failwith ("Cannot apply non-function value: " ^ 
+                            (match v1 with 
+                              | VInt _ -> "int"
+                              | VBool _ -> "bool"
+                              | _ -> "unknown"))))
   | Let {is_rec; name; value; body} ->
     if not is_rec then
       (* Non-recursive let: just bind the value after evaluation *)
@@ -421,15 +441,13 @@ let rec eval_expr (env: dyn_env) (e: expr) : value =
       let placeholder = VClos { name = Some name; arg = "__placeholder"; body = Unit; env = env } in
       let env' = Env.add name placeholder env in
       let v_val = eval_expr env' value in
-      (* If value turns out to be a closure, set its name and environment properly. *)
-      let v_val =
-        match v_val with
-        | VClos c -> VClos { c with name = Some name; env = env' }
+      let v_val = match v_val with
+        | VClos c -> VClos { name = Some name; arg = c.arg; body = c.body; env = env' }
         | _ -> v_val
-    in
-    let env'' = Env.add name v_val env' in
-    eval_expr env'' body
-  )      
+      in
+      let env'' = Env.add name v_val env' in
+      eval_expr env'' body
+    ) 
   | ListMatch {matched;hd_name;tl_name;cons_case;nil_case} ->
     let vm = eval_expr env matched in
     (match vm with
