@@ -3,7 +3,7 @@ include My_parser
 
 let rec assoc_opt x = function
   | [] -> None
-  | (y,v)::rest -> if y = x then Some v else assoc_opt x rest
+  | (y, v) :: rest -> if x = y then Some v else assoc_opt x rest
 
 let rec list_exists f = function
   | [] -> false
@@ -11,263 +11,117 @@ let rec list_exists f = function
 
 type substitution = (ident * ty) list
 
-let rec apply_subst_ty (s: substitution) (t: ty) : ty =
-  match t with
-  | TUnit | TInt | TFloat | TBool -> t
-  | TVar x ->
-    (match assoc_opt x s with
-     | Some t' -> t'
-     | None -> t)
-  | TList t' -> TList (apply_subst_ty s t')
-  | TOption t' -> TOption (apply_subst_ty s t')
-  | TPair (t1, t2) -> TPair (apply_subst_ty s t1, apply_subst_ty s t2)
-  | TFun (t1, t2) -> TFun (apply_subst_ty s t1, apply_subst_ty s t2)
+let rec apply_subst_ty (subst : substitution) (ty : ty) : ty =
+  match ty with
+  | TUnit | TInt | TFloat | TBool -> ty
+  | TVar var -> (match assoc_opt var subst with Some ty' -> ty' | None -> ty)
+  | TList t -> TList (apply_subst_ty subst t)
+  | TOption t -> TOption (apply_subst_ty subst t)
+  | TPair (t1, t2) -> TPair (apply_subst_ty subst t1, apply_subst_ty subst t2)
+  | TFun (arg_ty, ret_ty) -> TFun (apply_subst_ty subst arg_ty, apply_subst_ty subst ret_ty)
 
-let compose_subst (s1: substitution) (s2: substitution) : substitution =
-  let s2' = List.map (fun (x,t) -> (x, apply_subst_ty s1 t)) s2 in
-  let without_dups =
-    List.fold_left (fun acc (x,t) ->
-        if list_exists (fun (y,_) -> y = x) acc then acc else (x,t)::acc)
-      s2' s1
-  in without_dups
+let compose_subst (subst1 : substitution) (subst2 : substitution) : substitution =
+  let updated_subst2 = List.map (fun (x, t) -> (x, apply_subst_ty subst1 t)) subst2 in
+  let merged = List.fold_left (fun acc (x, t) ->
+      if list_exists (fun (y, _) -> x = y) acc then acc else (x, t) :: acc
+    ) updated_subst2 subst1
+  in
+  merged
 
-let rec ftv_ty = function
+let rec freetype = function
   | TUnit | TInt | TFloat | TBool -> []
   | TVar x -> [x]
-  | TList t -> ftv_ty t
-  | TOption t -> ftv_ty t
-  | TPair (t1, t2) -> (ftv_ty t1) @ (ftv_ty t2)
-  | TFun (t1, t2) -> (ftv_ty t1) @ (ftv_ty t2)
+  | TList t | TOption t -> freetype t
+  | TPair (t1, t2) | TFun (t1, t2) -> freetype t1 @ freetype t2
 
-(** Collect free type variables from a type scheme *)
-let ftv_scheme (Forall (vars, t)) =
-  List.filter (fun x -> not (List.mem x vars)) (ftv_ty t)
+let ftv_scheme (Forall (vars, ty)) =
+  List.filter (fun v -> not (List.mem v vars)) (freetype ty)
 
-(** Collect free type variables from an environment *)
-let ftv_env (env: stc_env) =
-  List.fold_left (fun acc (_, scheme) -> (ftv_scheme scheme) @ acc) [] (Env.to_list env)
+let ftv_env (env : stc_env) =
+  List.fold_left (fun acc (_, scheme) -> acc @ ftv_scheme scheme) [] (Env.to_list env)
 
-(** Generalize a type over the free variables not in the environment *)
-let generalize (env: stc_env) (t: ty) : ty_scheme =
-  let env_ftv = ftv_env env in
-  let t_ftv = ftv_ty t in
-  let vars = List.filter (fun x -> not (List.mem x env_ftv)) t_ftv in
-  Forall (vars, t)
+let generalize (env : stc_env) (ty : ty) : ty_scheme =
+  let env_free_vars = ftv_env env in
+  let ty_free_vars = freetype ty in
+  let generalized_vars = List.filter (fun v -> not (List.mem v env_free_vars)) ty_free_vars in
+  Forall (generalized_vars, ty)
 
-(** Unification algorithm *)
-let rec unify_one (t1: ty) (t2: ty) : substitution option =
-  let occurs_check x t =
-    List.mem x (ftv_ty t)
-  in
-  match t1, t2 with
-  | TUnit, TUnit -> Some []
-  | TInt, TInt -> Some []
-  | TFloat, TFloat -> Some []
-  | TBool, TBool -> Some []
-  | TVar x, TVar y when x = y -> Some []
-  | TVar x, _ ->
-    if occurs_check x t2 then None
-    else Some [(x,t2)]
-  | _, TVar x ->
-    if occurs_check x t1 then None
-    else Some [(x,t1)]
-  | TList a, TList b -> unify_pair a b
-  | TOption a, TOption b -> unify_pair a b
-  | TPair (a1,a2), TPair (b1,b2) ->
-    unify_pairs [(a1,b1);(a2,b2)]
-  | TFun (a1,a2), TFun (b1,b2) ->
-    unify_pairs [(a1,b1);(a2,b2)]
+let rec ty_subst (replacement : ty) (var : ident) (ty : ty) : ty =
+  match ty with
+  | TUnit | TInt | TFloat | TBool -> ty
+  | TVar x -> if x = var then replacement else TVar x
+  | TList t -> TList (ty_subst replacement var t)
+  | TOption t -> TOption (ty_subst replacement var t)
+  | TPair (t1, t2) -> TPair (ty_subst replacement var t1, ty_subst replacement var t2)
+  | TFun (t1, t2) -> TFun (ty_subst replacement var t1, ty_subst replacement var t2)
+
+let instantiate (Forall (vars, ty)) =
+  let subst = List.map (fun var -> (var, TVar (gensym ()))) vars in
+  apply_subst_ty subst ty
+
+let rec unify_constraints = function
+  | [] -> Some []
+  | (t1, t2) :: rest when t1 = t2 -> unify_constraints rest
+  | (TVar x, ty) :: rest | (ty, TVar x) :: rest ->
+      if List.mem x (freetype ty) then None
+      else
+        let rest' = List.map (fun (t1, t2) -> (ty_subst ty x t1, ty_subst ty x t2)) rest in
+        Option.map (fun sol -> (x, ty) :: sol) (unify_constraints rest')
+  | (TFun (t1, t2), TFun (t3, t4)) :: rest ->
+      unify_constraints ((t1, t3) :: (t2, t4) :: rest)
+  | (TPair (t1, t2), TPair (t3, t4)) :: rest ->
+      unify_constraints ((t1, t3) :: (t2, t4) :: rest)
+  | (TList t1, TList t2) :: rest -> unify_constraints ((t1, t2) :: rest)
+  | (TOption t1, TOption t2) :: rest -> unify_constraints ((t1, t2) :: rest)
   | _ -> None
 
-and unify_pair a b = unify_pairs [(a,b)]
-
-and unify_pairs constrs =
-  match constrs with
-  | [] -> Some []
-  | (t1,t2)::rest ->
-    (match unify_one t1 t2 with
-     | None -> None
-     | Some s ->
-       let rest' = List.map (fun (x,y) -> (apply_subst_ty s x, apply_subst_ty s y)) rest in
-       (match unify_pairs rest' with
-        | None -> None
-        | Some s2 -> Some (compose_subst s s2)))
-
-let unify (ty: ty) (cs: constr list) : ty_scheme option =
-  match unify_pairs cs with
+let unify (initial_ty : ty) (constraints : constr list) : ty_scheme option =
+  match unify_constraints constraints with
   | None -> None
-  | Some s ->
-      let t' = apply_subst_ty s ty in
-      (* Use the context's environment for generalization *)
-      let scheme = generalize Env.empty t' in
-      Some scheme
+  | Some subst ->
+      let unified_ty = apply_subst_ty subst initial_ty in
+      let free_vars = freetype unified_ty in
+      Some (Forall (free_vars, unified_ty))
 
-(** Instantiate a type scheme with fresh type variables *)
-let instantiate (Forall (vars, t)) =
-  let s = List.map (fun x -> (x, TVar (gensym ()))) vars in
-  apply_subst_ty s t
-
-type inference_state = {
-  env: stc_env;
-  constraints: constr list;
-}
-
-let add_constraint st c = { st with constraints = c :: st.constraints }
-
-(** Inference: returns (type, constraints) *)
-let rec infer_expr (st: inference_state) (e: expr) : ty * inference_state =
+let rec infer_expr (env : stc_env) (e : expr) : ty * constr list =
+  let fresh_ty () = TVar (gensym ()) in
   match e with
-  | Unit ->
-    (TUnit, st)
-  | True | False ->
-    (TBool, st)
-  | Int _ ->
-    (TInt, st)
-  | Float _ ->
-    (TFloat, st)
-  | Nil ->
-    let alpha = TVar (gensym()) in
-    (TList alpha, st)
-  | ENone ->
-    let alpha = TVar (gensym()) in
-    (TOption alpha, st)
-  | ESome e1 ->
-    let (t1, st1) = infer_expr st e1 in
-    (TOption t1, st1)
-  | Var x ->
-    (match Env.find_opt x st.env with
-     | Some sch ->
-       (instantiate sch, st)
-     | None -> failwith ("Unbound variable: " ^ x))
-  | Annot (e, t) ->
-    let (t_e, st_e) = infer_expr st e in
-    let st_e' = add_constraint st_e (t_e, t) in
-    (t, st_e')
-  | Bop (op, e1, e2) ->
-    let (t1, st1) = infer_expr st e1 in
-    let (t2, st2) = infer_expr st1 e2 in
-    let st3 =
-      match op with
-      | Add | Sub | Mul | Div | Mod ->
-        let st' = add_constraint st2 (t1, TInt) in
-        add_constraint st' (t2, TInt)
-      | AddF | SubF | MulF | DivF | PowF ->
-        let st' = add_constraint st2 (t1, TFloat) in
-        add_constraint st' (t2, TFloat)
-      | Cons ->
-        let st' = add_constraint st2 (t2, TList t1) in
-        st'
-      | Concat ->
-        let alpha = TVar (gensym()) in
-        let st' = add_constraint st2 (t1, TList alpha) in
-        add_constraint st' (t2, TList alpha)
-      | Lt | Lte | Gt | Gte | Eq | Neq ->
-        let st'' = add_constraint st2 (t1, t2) in
-        st''
-      | And | Or ->
-        let st' = add_constraint st2 (t1, TBool) in
-        add_constraint st' (t2, TBool)
-      | Comma ->
-        st2
-    in
-    let result_ty =
-      match op with
-      | Add | Sub | Mul | Div | Mod -> TInt
-      | AddF | SubF | MulF | DivF | PowF -> TFloat
-      | Lt | Lte | Gt | Gte | Eq | Neq | And | Or -> TBool
-      | Cons | Concat ->
-        apply_subst_ty [] t2
-      | Comma ->
-        TPair (t1, t2)
-    in
-    (result_ty, st3)
-  | If (e1, e2, e3) ->
-    let (t1, st1) = infer_expr st e1 in
-    let (t2, st2) = infer_expr st1 e2 in
-    let (t3, st3) = infer_expr st2 e3 in
-    let st4 = add_constraint st3 (t1, TBool) in
-    let st5 = add_constraint st4 (t2, t3) in
-    (t2, st5)
-  | Fun (x, ann, body) ->
-    let alpha = match ann with Some ty -> ty | None -> TVar (gensym()) in
-    let env' = Env.add x (Forall([],alpha)) st.env in
-    let st' = { st with env = env' } in
-    let (t_body, st_body) = infer_expr st' body in
-    (TFun(alpha, t_body), {st_body with env = st.env})
-  | App (e1, e2) ->
-    let (t1, st1) = infer_expr st e1 in
-    let (t2, st2) = infer_expr st1 e2 in
-    let alpha = TVar (gensym()) in
-    let st3 = add_constraint st2 (t1, TFun(t2, alpha)) in
-    (alpha, st3)
-  | Let {is_rec; name; value; body} ->
-    if not is_rec then (
-      let (t_val, st_val) = infer_expr st value in
-      let scheme = generalize st.env t_val in
-      let env' = Env.add name scheme st_val.env in
-      let st_body = {st_val with env = env'} in
-      let (t_body, st_body2) = infer_expr st_body body in
-      (t_body, {st_body2 with env=st.env})
-    ) else (
-      let alpha = TVar(gensym()) in
-      let beta = TVar(gensym()) in
-      let env' = Env.add name (Forall([], TFun(alpha,beta))) st.env in
-      let st' = {st with env=env'} in
-      let (t_val, st_val) = infer_expr st' value in
-      let st_val2 = add_constraint st_val (t_val, TFun(alpha,beta)) in
-      let scheme = generalize st_val2.env (apply_subst_ty [] t_val) in
-      let env'' = Env.add name scheme st_val2.env in
-      let st_body = {st_val2 with env=env''} in
-      let (t_body, st_body2) = infer_expr st_body body in
-      (t_body, {st_body2 with env=st.env})
+  | Unit -> (TUnit, [])
+  | True | False -> (TBool, [])
+  | Int _ -> (TInt, [])
+  | Float _ -> (TFloat, [])
+  | Var x -> (
+      match Env.find_opt x env with
+      | Some scheme -> (instantiate scheme, [])
+      | None -> failwith ("Unbound variable: " ^ x)
     )
-  | Assert e1 ->
-    let (t1, st1) = infer_expr st e1 in
-    let st2 = add_constraint st1 (t1, TBool) in
-    (TUnit, st2)
-  | ListMatch {matched;hd_name;tl_name;cons_case;nil_case} ->
-    let (t_mat, st1) = infer_expr st matched in
-    let alpha = TVar(gensym()) in
-    let st2 = add_constraint st1 (t_mat, TList alpha) in
-    let env_cons = Env.add hd_name (Forall([],alpha)) st2.env in
-    let env_cons = Env.add tl_name (Forall([], TList alpha)) env_cons in
-    let st_cons = {st2 with env = env_cons} in
-    let (t_cons, st_cons2) = infer_expr st_cons cons_case in
-    let (t_nil, st_nil) = infer_expr {st_cons2 with env = st2.env} nil_case in
-    let st3 = add_constraint st_nil (t_cons, t_nil) in
-    (t_cons, st3)
-  | OptMatch {matched;some_name;some_case;none_case} ->
-    let (t_mat, st1) = infer_expr st matched in
-    let alpha = TVar(gensym()) in
-    let st2 = add_constraint st1 (t_mat, TOption alpha) in
-    let env_some = Env.add some_name (Forall([],alpha)) st2.env in
-    let st_some = {st2 with env = env_some} in
-    let (t_some, st_some2) = infer_expr st_some some_case in
-    let (t_none, st_none) = infer_expr {st_some2 with env = st2.env} none_case in
-    let st3 = add_constraint st_none (t_some, t_none) in
-    (t_some, st3)
-  | PairMatch {matched;fst_name;snd_name;case} ->
-    let (t_mat, st1) = infer_expr st matched in
-    let alpha = TVar(gensym()) in
-    let beta = TVar(gensym()) in
-    let st2 = add_constraint st1 (t_mat, TPair (alpha,beta)) in
-    let env_pair = Env.add fst_name (Forall([],alpha)) st2.env in
-    let env_pair = Env.add snd_name (Forall([],beta)) env_pair in
-    let st_pair = {st2 with env=env_pair} in
-    let (t_case, st_case) = infer_expr st_pair case in
-    (t_case, {st_case with env=st.env})
+  | Fun (arg, ann, body) ->
+      let arg_ty = match ann with Some t -> t | None -> fresh_ty () in
+      let env' = Env.add arg (Forall ([], arg_ty)) env in
+      let body_ty, body_constraints = infer_expr env' body in
+      (TFun (arg_ty, body_ty), body_constraints)
+  | App (e1, e2) ->
+      let t1, c1 = infer_expr env e1 in
+      let t2, c2 = infer_expr env e2 in
+      let ret_ty = fresh_ty () in
+      (ret_ty, (t1, TFun (t2, ret_ty)) :: c1 @ c2)
+  | Let { is_rec; name; value; body } ->
+      if not is_rec then
+        let value_ty, value_constraints = infer_expr env value in
+        let env' = Env.add name (Forall ([], value_ty)) env in
+        let body_ty, body_constraints = infer_expr env' body in
+        (body_ty, value_constraints @ body_constraints)
+      else
+        let fn_ty = fresh_ty () in
+        let env' = Env.add name (Forall ([], fn_ty)) env in
+        let value_ty, value_constraints = infer_expr env' value in
+        let body_ty, body_constraints = infer_expr env' body in
+        (body_ty, (fn_ty, value_ty) :: value_constraints @ body_constraints)
+  | _ -> failwith "Expression not implemented yet"
 
-let type_of (ctx: stc_env) (e: expr) : ty_scheme option =
-  try
-    let (t, st') = infer_expr {env=ctx; constraints=[]} e in
-    let cs = st'.constraints in
-    match unify t cs with
-    | None -> None
-    | Some scheme -> Some scheme
-  with
-    | Failure msg ->
-      print_endline ("Type inference failed: " ^ msg);
-      None   
+let type_of (env : stc_env) (e : expr) : ty_scheme option =
+  let ty, constraints = infer_expr env e in
+  unify ty constraints
 
   
 
