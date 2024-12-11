@@ -86,7 +86,7 @@ let type_of (ctxt : stc_env) (e : expr) : ty_scheme option =
               | [] -> t
               | v :: vs ->
                   let fresh_t = fresh () in
-                  instantiate (ty_subst fresh_t v t) vs
+                  instantiate (substitute_type fresh_t v t) vs
             in
             (instantiate t bnd_vars, [])
         | None -> (fresh (), [])
@@ -189,197 +189,129 @@ exception RecWithoutArg
 exception CompareFunVals
 
 
-let rec eval_expr (env: dyn_env) (e: expr) : value =
-  match e with
-  | Unit -> 
-    VUnit
-  | True -> 
-    VBool true
-  | False -> VBool false
-  | Int n -> VInt n
-  | Float f -> VFloat f
-  | Nil -> VList []
-  | ENone -> VNone
-  | ESome e ->
-    let v = eval_expr env e in
-    VSome v
-  | Var x ->
-    (match Env.find_opt x env with
-     | Some v -> v
-     | None -> failwith ("Runtime error: unbound variable "^x))
-  | Annot (e, _) ->
-    eval_expr env e
-  | Assert e ->
-    let v = eval_expr env e in
-    (match v with
-     | VBool true -> VUnit
-     | VBool false -> raise AssertFail
-     | _ -> raise AssertFail)
-  | Bop (op, e1, e2) ->
-    let v1 = eval_expr env e1 in
-    let v2 = eval_expr env e2 in
-    let int_op f = (match v1,v2 with
-        | VInt x, VInt y -> f x y
-        | _ -> raise CompareFunVals) in
-    let float_op f = (match v1,v2 with
-        | VFloat x, VFloat y -> f x y
-        | _ -> raise CompareFunVals) in
-    let bool_op f = (match v1,v2 with
-        | VBool x, VBool y -> f x y
-        | _ -> raise CompareFunVals) in
-    let compare_op cmp =
-      let rec cmp_val v1 v2 =
-        match v1, v2 with
-        | VUnit, VUnit -> 0
-        | VBool x, VBool y -> compare x y
-        | VInt x, VInt y -> compare x y
-        | VFloat x, VFloat y -> compare x y
-        | VList l1, VList l2 ->
-          let rec cmp_list l1 l2 =
-            match l1, l2 with
-            | [], [] -> 0
-            | [], _ -> -1
-            | _, [] -> 1
-            | x::xs, y::ys ->
-              let c = cmp_val x y in
-              if c <> 0 then c else cmp_list xs ys
-          in cmp_list l1 l2
-        | VNone, VNone -> 0
-        | VSome x, VSome y -> cmp_val x y
-        | VPair (a,b), VPair(c,d) ->
-          let c1 = cmp_val a c in
-          if c1 <> 0 then c1 else cmp_val b d
-        | VClos _, _ | _, VClos _ -> raise CompareFunVals
-        | _ ->
-          let tag v = match v with
-            | VUnit->0|VBool _->1|VInt _->2|VFloat _->3
-            | VList _->4|VNone->5|VSome _->6|VPair _->7|VClos _->8
-          in compare (tag v1) (tag v2)
-      in
-      let c = cmp_val v1 v2 in
-      cmp c
-    in
-    (match op with
-     | Add -> VInt (int_op ( + ))
-     | Sub -> VInt (int_op ( - ))
-     | Mul -> VInt (int_op ( * ))
-     | Div ->
-       (match v1,v2 with
-        | VInt _, VInt 0 -> raise DivByZero
-        | VInt x, VInt y -> VInt (x / y)
-        | _ -> raise CompareFunVals)
-     | Mod ->
-       (match v1,v2 with
-        | VInt _, VInt 0 -> raise DivByZero
-        | VInt x, VInt y -> VInt (x mod y)
-        | _ -> raise CompareFunVals)
-     | AddF -> VFloat (float_op ( +. ))
-     | SubF -> VFloat (float_op ( -. ))
-     | MulF -> VFloat (float_op ( *. ))
-     | DivF ->
-       (match v1,v2 with
-        | VFloat x, VFloat y ->
-          if y = 0.0 then raise DivByZero else VFloat (x /. y)
-        | _ -> raise CompareFunVals)
-     | PowF ->
-       (match v1,v2 with
-        | VFloat x, VFloat y -> VFloat (x ** y)
-        | _ -> raise CompareFunVals)
-     | Cons ->
-       (match v1,v2 with
-        | v, VList vs -> VList (v::vs)
-        | _ -> raise CompareFunVals)
-     | Concat ->
-       (match v1,v2 with
-        | VList l1, VList l2 -> VList (l1 @ l2)
-        | _ -> raise CompareFunVals)
-     | Lt -> VBool (compare_op (fun c -> c<0))
-     | Lte -> VBool (compare_op (fun c -> c<=0))
-     | Gt -> VBool (compare_op (fun c -> c>0))
-     | Gte -> VBool (compare_op (fun c -> c>=0))
-     | Eq -> VBool (compare_op (fun c -> c=0))
-     | Neq -> VBool (compare_op (fun c -> c<>0))
-     | And -> VBool (bool_op (&&))
-     | Or -> VBool (bool_op (||))
-     | Comma ->
-       VPair(v1,v2)
-    )
-  | If (e1,e2,e3) ->
-    let v1 = eval_expr env e1 in
-    (match v1 with
-     | VBool true -> eval_expr env e2
-     | VBool false -> eval_expr env e3
-     | _ -> failwith "if condition not a boolean")
-  | Fun (x,_,body) ->
-    VClos {name=None;arg=x;body;env}
-  | App (Var "length", e2) ->
-    let v2 = eval_expr env e2 in
-    (match v2 with
-      | VList l -> VInt (List.length l)
-      | _ -> failwith "Runtime error: length expects a list")
+let eval_expr (env : dyn_env) (expr : expr) : value =
+  let rec evaluate env expr =
+    match expr with
+    | Unit -> VUnit
+    | True -> VBool true
+    | False -> VBool false
+    | Int n -> VInt n
+    | Float f -> VFloat f
+    | Nil -> VList []
+    | ENone -> VNone
+    | Var name -> Env.find name env
+    | Fun (param, _, body) -> 
+        VClos {name = None; arg = param; body; env}
+    | App (func, arg) -> 
+        let func_val = evaluate env func in
+        let arg_val = evaluate env arg in
+        (match func_val with
+         | VClos {name = None; arg; body; env = func_env} ->
+             evaluate (Env.add arg arg_val func_env) body
+         | VClos {name = Some self; arg; body; env = func_env} ->
+             let rec_env = Env.add self func_val func_env in
+             evaluate (Env.add arg arg_val rec_env) body
+         | _ -> failwith "Invalid function application")
+    | Let {is_rec = false; name; value; body} -> 
+        let value_val = evaluate env value in
+        evaluate (Env.add name value_val env) body
+    | Let {is_rec = true; name; value; body} ->
+        let clos_val = evaluate env value in
+        (match clos_val with
+         | VClos {name = None; arg; body = fn_body; env = fn_env} ->
+             let new_env = Env.add name (VClos {name = Some name; arg; body = fn_body; env = fn_env}) env in
+             evaluate new_env body
+         | VClos {name = Some _; _} -> raise RecWithoutArg
+         | _ -> failwith "Invalid recursive let binding")
+    | Bop (op, e1, e2) ->
+        let val1 = evaluate env e1 in
+        let val2 = evaluate env e2 in
+        (match op with
+         | Add | Sub | Mul | Div | Mod -> (
+             match val1, val2 with
+             | VInt n1, VInt n2 -> 
+                 (match op with
+                  | Add -> VInt (n1 + n2)
+                  | Sub -> VInt (n1 - n2)
+                  | Mul -> VInt (n1 * n2)
+                  | Div -> if n2 = 0 then raise DivByZero else VInt (n1 / n2)
+                  | Mod -> if n2 = 0 then raise DivByZero else VInt (n1 mod n2)
+                  | _ -> failwith "Invalid arithmetic operation")
+             | _ -> failwith "Expected integer operands")
+         | AddF | SubF | MulF | DivF | PowF -> (
+             match val1, val2 with
+             | VFloat f1, VFloat f2 -> 
+                 (match op with
+                  | AddF -> VFloat (f1 +. f2)
+                  | SubF -> VFloat (f1 -. f2)
+                  | MulF -> VFloat (f1 *. f2)
+                  | DivF -> VFloat (f1 /. f2)
+                  | PowF -> VFloat (f1 ** f2)
+                  | _ -> failwith "Invalid floating-point operation")
+             | _ -> failwith "Expected float operands")
+         | Lt | Lte | Gt | Gte | Eq | Neq ->
+             (match val1, val2 with
+              | VClos _, _ | _, VClos _ -> raise CompareFunVals
+              | _ -> VBool (
+                  match op with
+                  | Lt -> val1 < val2
+                  | Lte -> val1 <= val2
+                  | Gt -> val1 > val2
+                  | Gte -> val1 >= val2
+                  | Eq -> val1 = val2
+                  | Neq -> val1 <> val2
+                  | _ -> failwith "Invalid comparison operation"))
+         | Cons -> (
+             match val2 with
+             | VList lst -> VList (val1 :: lst)
+             | _ -> failwith "Expected a list")
+         | Concat -> (
+             match val1, val2 with
+             | VList lst1, VList lst2 -> VList (lst1 @ lst2)
+             | _ -> failwith "Expected two lists")
+         | And -> (
+             match val1, val2 with
+             | VBool false, _ -> VBool false
+             | VBool true, v -> v
+             | _ -> failwith "Invalid boolean operation")
+         | Or -> (
+             match val1, val2 with
+             | VBool true, _ -> VBool true
+             | VBool false, v -> v
+             | _ -> failwith "Invalid boolean operation")
+         | Comma -> VPair (val1, val2))
+    | If (cond, then_branch, else_branch) ->
+        (match evaluate env cond with
+         | VBool true -> evaluate env then_branch
+         | VBool false -> evaluate env else_branch
+         | _ -> failwith "Expected boolean condition in if statement")
+    | ListMatch {matched; hd_name; tl_name; cons_case; nil_case} -> 
+        (match evaluate env matched with
+         | VList [] -> evaluate env nil_case
+         | VList (hd :: tl) ->
+             let new_env = Env.add tl_name (VList tl) (Env.add hd_name hd env) in
+             evaluate new_env cons_case
+         | _ -> failwith "Invalid list pattern match")
+    | OptMatch {matched; some_name; some_case; none_case} ->
+        (match evaluate env matched with
+         | VNone -> evaluate env none_case
+         | VSome val_some -> evaluate (Env.add some_name val_some env) some_case
+         | _ -> failwith "Invalid option pattern match")
+    | PairMatch {matched; fst_name; snd_name; case} ->
+        (match evaluate env matched with
+         | VPair (fst, snd) ->
+             let new_env = Env.add snd_name snd (Env.add fst_name fst env) in
+             evaluate new_env case
+         | _ -> failwith "Invalid pair pattern match")
+    | ESome expr -> VSome (evaluate env expr)
+    | Assert expr ->
+        (match evaluate env expr with
+         | VBool true -> VUnit
+         | _ -> raise AssertFail)
+    | Annot (expr, _) -> evaluate env expr
+  in
+  evaluate env expr
 
-  | App (e1, e2) ->
-    let v1 = eval_expr env e1 in
-    let v2 = eval_expr env e2 in
-    (match v1 with
-      | VClos {arg; body; env=clos_env; name=_} ->
-          let env' = Env.add arg v2 clos_env in
-          eval_expr env' body
-      | _ -> 
-          (* Additional handling for built-in functions *)
-          (match e1 with
-          | Var fname ->
-              (match Env.find_opt fname env with
-                | Some (VClos closure) -> 
-                    let env' = Env.add closure.arg v2 closure.env in
-                    eval_expr env' closure.body
-                | Some _ -> failwith ("Cannot apply non-function value: " ^ fname)
-                | None -> failwith ("Unbound function: " ^ fname))
-          | _ -> failwith ("Cannot apply non-function value: " ^ 
-                            (match v1 with 
-                              | VInt _ -> "int"
-                              | VBool _ -> "bool"
-                              | _ -> "unknown"))))
-  | Let {is_rec; name; value; body} ->
-    if not is_rec then
-      (* Non-recursive let: just bind the value after evaluation *)
-      let v_val = eval_expr env value in
-      let env' = Env.add name v_val env in
-      eval_expr env' body
-    else (
-      let placeholder = VClos { name = Some name; arg = "__placeholder"; body = Unit; env = env } in
-      let env' = Env.add name placeholder env in
-      let v_val = eval_expr env' value in
-      let v_val = match v_val with
-        | VClos c -> VClos { name = Some name; arg = c.arg; body = c.body; env = env' }
-        | _ -> v_val
-      in
-      let env'' = Env.add name v_val env' in
-      eval_expr env'' body
-    ) 
-  | ListMatch {matched;hd_name;tl_name;cons_case;nil_case} ->
-    let vm = eval_expr env matched in
-    (match vm with
-     | VList [] -> eval_expr env nil_case
-     | VList (h::t) ->
-       let env' = Env.add hd_name h (Env.add tl_name (VList t) env) in
-       eval_expr env' cons_case
-     | _ -> failwith "list match on non-list")
-  | OptMatch {matched;some_name;some_case;none_case} ->
-    let vm = eval_expr env matched in
-    (match vm with
-     | VNone -> eval_expr env none_case
-     | VSome v ->
-       let env' = Env.add some_name v env in
-       eval_expr env' some_case
-     | _ -> failwith "option match on non-option")
-  | PairMatch {matched;fst_name;snd_name;case} ->
-    let vm = eval_expr env matched in
-    (match vm with
-     | VPair (a,b) ->
-       let env' = Env.add fst_name a (Env.add snd_name b env) in
-       eval_expr env' case
-     | _ -> failwith "pair match on non-pair")
 
 let base_env =
   let alpha = TVar (gensym()) in
@@ -415,7 +347,7 @@ let base_runtime_env =
     name = Some "length";
     arg = "xs";
     body = length_body;
-    env = rec_env_for_length (* Pass the environment directly *)
+    env = rec_env_for_length
   } in
   let rec_env_for_length = Env.add "length" length_clos rec_env_for_length in
   rec_env_for_length
